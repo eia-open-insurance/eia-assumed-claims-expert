@@ -1,5 +1,7 @@
 package com.eia.assumedclaims.expert;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
+
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -18,7 +20,7 @@ public record AssumedClaim(
         AssumedClaimStatus status,
         LocalDate lossDate,
         LocalDate reportDate,
-        BigDecimal reserveAmount,
+        @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal reserveAmount,
         String reserveCurrency,
         int version,
         Instant createdAt,

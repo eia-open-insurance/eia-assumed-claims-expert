@@ -77,7 +77,20 @@ class AssumedClaimControllerTest {
                 .andExpect(jsonPath("$[0].assumedClaimNumber").value("RNS-2026-0007731"))
                 .andExpect(jsonPath("$[0].businessBook").value(ASSUMED))
                 .andExpect(jsonPath("$[0].status").value("NOTIFIED"))
-                .andExpect(jsonPath("$[0].reserveAmount").value(12500.0));
+                .andExpect(jsonPath("$[0].reserveAmount").value("12500.0000"))
+                .andExpect(jsonPath("$[0].reserveAmount").isString());
+    }
+
+    @Test
+    void reserveAmountIsSerializedAsDecimalString() throws Exception {
+        given(repository.findAll(TENANT)).willReturn(List.of(claim(AssumedClaimStatus.NOTIFIED, 0)));
+
+        mvc.perform(get("/internal/v1/assumed-claims")
+                        .header(BookScopeFilter.BOOK_HEADER, ASSUMED)
+                        .param("tenantId", TENANT.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].reserveAmount").isString())
+                .andExpect(jsonPath("$[0].reserveAmount").value("12500.0000"));
     }
 
     @Test
