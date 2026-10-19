@@ -21,6 +21,33 @@ Assumed Claims persistence, invariants, read models, batch jobs, Quartz schedule
 - Maintain README, CODEOWNERS, SECURITY, CHANGELOG, tests, and local verification.
 - Contain no business logic in shared libraries or front-end remotes.
 
+## Implemented slice
+
+- Spring Boot 3.4.0 on Java 22, listening on port `8089`, database `eia_assumed`.
+- Table `assumed_claim` with `id` (UUIDv7), `tenant_id`, `business_book` fixed to `ASSUMED`,
+  `assumed_claim_number` (`RNS-YYYY-NNNNNNN`), `contract_id`, `cedent_claim_number`, `status`,
+  `loss_date`, `report_date`, `reserve_amount`, `reserve_currency`, `version`, `created_at`, and
+  `updated_at`. Check constraints enforce `report_date >= loss_date`, non-negative reserves, and
+  the ASSUMED book.
+- Internal API: `GET /internal/v1/assumed-claims`, `GET /internal/v1/assumed-claims/{id}`,
+  `POST /internal/v1/assumed-claims`, and `POST /internal/v1/assumed-claims/{id}/status`.
+- The book wall is enforced on every `/internal/v1/**` call. A request without
+  `X-EIA-Book: ASSUMED` receives a structured `404` (`EIA-RNS-7005`), never `403`.
+- The status lifecycle from SPEC §11.5.6 is enforced with optimistic `version` concurrency.
+- Errors are structured `Problem`-shaped JSON for `400`, `404`, `409`, and `415`/`405` cases.
+
+## Local run
+
+```powershell
+$env:JAVA_HOME='C:\Program Files\Eclipse Adoptium\jdk-22.0.2.9-hotspot'
+.\gradlew.bat build
+java -jar build\libs\eia-assumed-claims-expert-0.1.0-SNAPSHOT.jar
+```
+
+Create the database once with
+`psql -U postgres -h localhost -c "CREATE DATABASE eia_assumed"`. Schema bootstrap runs from
+`schema.sql` on startup.
+
 ## Verification
 
 - Lint and format

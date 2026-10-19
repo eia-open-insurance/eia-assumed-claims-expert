@@ -1,0 +1,17 @@
+server:
+  port: 8089
+spring:
+  application:
+    name: eia-assumed-claims-expert
+  datasource:
+    url: jdbc:postgresql://localhost:5432/eia_assumed
+    username: postgres
+    password: postgres
+  sql:
+    init:
+      mode: always
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
