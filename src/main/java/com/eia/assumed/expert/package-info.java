@@ -1,5 +1,5 @@
 /**
- * eia-reinsurance-expert.
+ * eia-assumed-claims-expert.
  */
 package com.eia.reinsurance.expert;
 
