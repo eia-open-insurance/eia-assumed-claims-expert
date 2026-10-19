@@ -1,17 +1,17 @@
-# eia-assumed-expert
+# eia-reinsurance-expert
 
 - GitHub organization: `eia-open-insurance`
-- Repository URL: https://github.com/eia-open-insurance/eia-assumed-expert
+- Repository URL: https://github.com/eia-open-insurance/eia-reinsurance-expert
 - Type: Spring Boot service
 - Deployable: Yes
-- Owner: Assumed
+- Owner: Reinsurance
 - Runtime: Java 22, Spring Boot, Spring Batch, Quartz
-- Data store: eia_assumed (ent, ref, audit schemas)
+- Data store: eia_reinsurance (ent, ref, audit schemas)
 - Depends on: eia-contracts, eia-open-insurance-libs
 
 ## Purpose
 
-Assumed persistence, invariants, read models, batch jobs, Quartz schedules, and outbox/inbox. Assumed claims: loss advices, reserves, cash calls, recoveries, and commutations.
+Reinsurance persistence, invariants, read models, batch jobs, Quartz schedules, and outbox/inbox. Reinsurance claims: loss advices, reserves, cash calls, recoveries, and commutations.
 
 ## Responsibilities
 
