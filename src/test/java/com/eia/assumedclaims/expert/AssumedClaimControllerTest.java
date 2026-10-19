@@ -13,10 +13,11 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -42,7 +43,10 @@ class AssumedClaimControllerTest {
     private ObjectMapper objectMapper;
 
     @MockitoBean
-    private AssumedClaimRepository repository;
+    private AssumedClaimService service;
+
+    @MockitoBean
+    private FinancialService financials;
 
     @Test
     void listRequiresAssumedBookAndReturns404WhenMissing() throws Exception {
@@ -52,7 +56,7 @@ class AssumedClaimControllerTest {
                 .andExpect(jsonPath("$.code").value("EIA-RNS-7005"))
                 .andExpect(jsonPath("$.status").value(404));
 
-        verifyNoInteractions(repository);
+        verifyNoInteractions(service);
     }
 
     @Test
@@ -63,12 +67,12 @@ class AssumedClaimControllerTest {
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("EIA-RNS-7005"));
 
-        verifyNoInteractions(repository);
+        verifyNoInteractions(service);
     }
 
     @Test
-    void listReturnsAssumedClaims() throws Exception {
-        given(repository.findAll(TENANT)).willReturn(List.of(claim(AssumedClaimStatus.NOTIFIED, 0)));
+    void listReturnsAssumedClaimsWithStringMoney() throws Exception {
+        given(service.list(TENANT)).willReturn(List.of(claim(AssumedClaimStatus.NOTIFIED, 0)));
 
         mvc.perform(get("/internal/v1/assumed-claims")
                         .header(BookScopeFilter.BOOK_HEADER, ASSUMED)
@@ -82,20 +86,8 @@ class AssumedClaimControllerTest {
     }
 
     @Test
-    void reserveAmountIsSerializedAsDecimalString() throws Exception {
-        given(repository.findAll(TENANT)).willReturn(List.of(claim(AssumedClaimStatus.NOTIFIED, 0)));
-
-        mvc.perform(get("/internal/v1/assumed-claims")
-                        .header(BookScopeFilter.BOOK_HEADER, ASSUMED)
-                        .param("tenantId", TENANT.toString()))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].reserveAmount").isString())
-                .andExpect(jsonPath("$[0].reserveAmount").value("12500.0000"));
-    }
-
-    @Test
     void getReturnsStructured404WhenMissing() throws Exception {
-        given(repository.findById(TENANT, CLAIM)).willReturn(Optional.empty());
+        given(service.get(TENANT, CLAIM)).willThrow(ApiException.assumedClaimNotFound(CLAIM));
 
         mvc.perform(get("/internal/v1/assumed-claims/{id}", CLAIM)
                         .header(BookScopeFilter.BOOK_HEADER, ASSUMED)
@@ -107,10 +99,11 @@ class AssumedClaimControllerTest {
 
     @Test
     void createPersistsClaimAsNotified() throws Exception {
-        given(repository.create(any())).willReturn(claim(AssumedClaimStatus.NOTIFIED, 0));
+        given(service.create(any(), any())).willReturn(claim(AssumedClaimStatus.NOTIFIED, 0));
 
         mvc.perform(post("/internal/v1/assumed-claims")
                         .header(BookScopeFilter.BOOK_HEADER, ASSUMED)
+                        .header("X-EIA-User", "adjuster@example.com")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "tenantId", TENANT.toString(),
@@ -124,11 +117,11 @@ class AssumedClaimControllerTest {
                 .andExpect(jsonPath("$.status").value("NOTIFIED"))
                 .andExpect(jsonPath("$.assumedClaimNumber").value("RNS-2026-0007731"));
 
-        verify(repository).create(any());
+        verify(service).create(any(), eq("adjuster@example.com"));
     }
 
     @Test
-    void createRejectsReportDateBeforeLossDate() throws Exception {
+    void createRejectsReportDateBeforeLossDateBeforeServiceCall() throws Exception {
         mvc.perform(post("/internal/v1/assumed-claims")
                         .header(BookScopeFilter.BOOK_HEADER, ASSUMED)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -144,7 +137,7 @@ class AssumedClaimControllerTest {
                 .andExpect(jsonPath("$.errors[0].field").value("reportDate"))
                 .andExpect(jsonPath("$.errors[0].code").value("REPORT_BEFORE_LOSS"));
 
-        verify(repository, never()).create(any());
+        verifyNoInteractions(service);
     }
 
     @Test
@@ -161,7 +154,7 @@ class AssumedClaimControllerTest {
                 .andExpect(jsonPath("$.code").value("EIA-RNS-7004"))
                 .andExpect(jsonPath("$.errors[0].field").value("reserveAmount"));
 
-        verify(repository, never()).create(any());
+        verifyNoInteractions(service);
     }
 
     @Test
@@ -180,7 +173,7 @@ class AssumedClaimControllerTest {
 
     @Test
     void transitionAppliesAllowedStatus() throws Exception {
-        given(repository.changeStatus(TENANT, CLAIM, AssumedClaimStatus.RESERVED, 2))
+        given(service.changeStatus(TENANT, CLAIM, AssumedClaimStatus.RESERVED, 2, "system"))
                 .willReturn(claim(AssumedClaimStatus.RESERVED, 3));
 
         mvc.perform(post("/internal/v1/assumed-claims/{id}/status", CLAIM)
@@ -196,25 +189,25 @@ class AssumedClaimControllerTest {
     }
 
     @Test
-    void transitionRejectsIllegalStatusWith409() throws Exception {
-        given(repository.changeStatus(TENANT, CLAIM, AssumedClaimStatus.PAID, 2))
-                .willThrow(ApiException.invalidTransition(AssumedClaimStatus.OPEN, AssumedClaimStatus.PAID));
+    void transitionRejectsOpenWithoutAcceptedAdviceWith422() throws Exception {
+        given(service.changeStatus(TENANT, CLAIM, AssumedClaimStatus.OPEN, 1, "system"))
+                .willThrow(ApiException.adviceRequiredToOpen());
 
         mvc.perform(post("/internal/v1/assumed-claims/{id}/status", CLAIM)
                         .header(BookScopeFilter.BOOK_HEADER, ASSUMED)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "tenantId", TENANT.toString(),
-                                "targetStatus", "PAID",
-                                "expectedVersion", 2))))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.code").value("EIA-RNS-7003"))
-                .andExpect(jsonPath("$.category").value("CONFLICT"));
+                                "targetStatus", "OPEN",
+                                "expectedVersion", 1))))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("EIA-RNS-7102"))
+                .andExpect(jsonPath("$.category").value("BUSINESS_RULE"));
     }
 
     @Test
-    void transitionRejectsStaleVersionWith409() throws Exception {
-        given(repository.changeStatus(TENANT, CLAIM, AssumedClaimStatus.OPEN, 1))
+    void staleVersionReturns409() throws Exception {
+        given(service.changeStatus(TENANT, CLAIM, AssumedClaimStatus.OPEN, 1, "system"))
                 .willThrow(ApiException.versionConflict(1));
 
         mvc.perform(post("/internal/v1/assumed-claims/{id}/status", CLAIM)
@@ -226,6 +219,60 @@ class AssumedClaimControllerTest {
                                 "expectedVersion", 1))))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("EIA-RNS-7006"));
+    }
+
+    @Test
+    void closeReturnsClosedClaim() throws Exception {
+        given(service.close(TENANT, CLAIM, "system")).willReturn(claim(AssumedClaimStatus.CLOSED, 8));
+
+        mvc.perform(post("/internal/v1/assumed-claims/{id}/close", CLAIM)
+                        .header(BookScopeFilter.BOOK_HEADER, ASSUMED)
+                        .header("X-EIA-Tenant", TENANT.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CLOSED"));
+    }
+
+    @Test
+    void closeBlockedReturns422() throws Exception {
+        given(service.close(TENANT, CLAIM, "system"))
+                .willThrow(ApiException.claimCloseBlocked("An open dispute must be resolved first (RNS-11)."));
+
+        mvc.perform(post("/internal/v1/assumed-claims/{id}/close", CLAIM)
+                        .header(BookScopeFilter.BOOK_HEADER, ASSUMED)
+                        .header("X-EIA-Tenant", TENANT.toString()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("EIA-RNS-7701"));
+    }
+
+    @Test
+    void financialsReturnStringAmounts() throws Exception {
+        given(financials.summary(TENANT, CLAIM)).willReturn(new FinancialSummary(
+                CLAIM, TENANT, "USD", new BigDecimal("100.0000"), new BigDecimal("0.0000"),
+                new BigDecimal("250.0000"), new BigDecimal("0.0000"), new BigDecimal("350.0000"),
+                new BigDecimal("25.0000"), new BigDecimal("325.0000"), new BigDecimal("0.0000"),
+                new BigDecimal("500.0000"), Instant.parse("2026-10-19T12:00:00Z"), 5));
+
+        mvc.perform(get("/internal/v1/assumed-claims/{id}/financials", CLAIM)
+                        .header(BookScopeFilter.BOOK_HEADER, ASSUMED)
+                        .header("X-EIA-Tenant", TENANT.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cededPaidAmount").value("100.0000"))
+                .andExpect(jsonPath("$.cededPaidAmount").isString())
+                .andExpect(jsonPath("$.currency").value("USD"));
+    }
+
+    @Test
+    void auditReturnsEntries() throws Exception {
+        given(service.audit(TENANT, CLAIM)).willReturn(List.of(new ClaimAuditEntry(
+                UUID.randomUUID(), TENANT, CLAIM, AuditEventType.CLAIM_REGISTERED, "adjuster",
+                "registered", Instant.parse("2026-10-19T12:00:00Z"), 1)));
+
+        mvc.perform(get("/internal/v1/assumed-claims/{id}/audit", CLAIM)
+                        .header(BookScopeFilter.BOOK_HEADER, ASSUMED)
+                        .header("X-EIA-Tenant", TENANT.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].eventType").value("CLAIM_REGISTERED"))
+                .andExpect(jsonPath("$[0].sequence").value(1));
     }
 
     private static AssumedClaim claim(AssumedClaimStatus status, int version) {

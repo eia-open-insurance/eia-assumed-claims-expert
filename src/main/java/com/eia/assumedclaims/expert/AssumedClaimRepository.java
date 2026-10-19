@@ -5,11 +5,10 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 import org.springframework.util.StringUtils;
 
+import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.Year;
-import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -41,9 +40,11 @@ public class AssumedClaimRepository {
     );
 
     private final JdbcTemplate jdbc;
+    private final NumberSequences numbers;
 
-    public AssumedClaimRepository(JdbcTemplate jdbc) {
+    public AssumedClaimRepository(JdbcTemplate jdbc, NumberSequences numbers) {
         this.jdbc = jdbc;
+        this.numbers = numbers;
     }
 
     public List<AssumedClaim> findAll(UUID tenantId) {
@@ -61,8 +62,7 @@ public class AssumedClaimRepository {
 
     public AssumedClaim create(CreateAssumedClaimRequest request) {
         UUID id = UuidV7.generate();
-        String assumedClaimNumber = "RNS-" + Year.now(ZoneOffset.UTC).getValue() + "-"
-                + String.format("%07d", nextNumber());
+        String assumedClaimNumber = numbers.nextClaimNumber();
         Instant now = Instant.now();
 
         jdbc.update("""
@@ -118,12 +118,49 @@ public class AssumedClaimRepository {
                 .orElseThrow(() -> ApiException.assumedClaimNotFound(id));
     }
 
-    private long nextNumber() {
-        Long value = jdbc.queryForObject("SELECT nextval('assumed_claim_number_seq')", Long.class);
-        if (value == null) {
-            throw new IllegalStateException("assumed_claim_number_seq returned no value");
+    /**
+     * Applies the terminal state for an executed commutation. Reserve history has already been
+     * deactivated by {@link ReserveRepository}; the claim is closed directly because the commutation
+     * operation owns the COMMUTED-to-CLOSED step.
+     */
+    public AssumedClaim closeAfterCommutation(UUID tenantId, UUID id) {
+        int updated = jdbc.update("""
+                UPDATE assumed_claim
+                   SET status = 'CLOSED', reserve_amount = 0, version = version + 1, updated_at = ?
+                 WHERE id = ? AND tenant_id = ? AND business_book = 'ASSUMED'
+                """,
+                Timestamp.from(Instant.now()),
+                id,
+                tenantId);
+        if (updated == 0) {
+            throw ApiException.assumedClaimNotFound(id);
         }
-        return value;
+        return findById(tenantId, id)
+                .orElseThrow(() -> ApiException.assumedClaimNotFound(id));
+    }
+
+    /** Bumps the aggregate version after a material child-record write. */
+    public void touch(UUID tenantId, UUID id) {
+        jdbc.update("""
+                UPDATE assumed_claim
+                   SET version = version + 1, updated_at = ?
+                 WHERE id = ? AND tenant_id = ? AND business_book = 'ASSUMED'
+                """,
+                Timestamp.from(Instant.now()),
+                id,
+                tenantId);
+    }
+
+    public void updateReserveAmount(UUID tenantId, UUID id, BigDecimal reserveAmount) {
+        jdbc.update("""
+                UPDATE assumed_claim
+                   SET reserve_amount = ?, version = version + 1, updated_at = ?
+                 WHERE id = ? AND tenant_id = ? AND business_book = 'ASSUMED'
+                """,
+                reserveAmount,
+                Timestamp.from(Instant.now()),
+                id,
+                tenantId);
     }
 
     private static String normalize(String value) {

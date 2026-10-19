@@ -24,17 +24,40 @@ Assumed Claims persistence, invariants, read models, batch jobs, Quartz schedule
 ## Implemented slice
 
 - Spring Boot 3.4.0 on Java 22, listening on port `8089`, database `eia_assumed`.
-- Table `assumed_claim` with `id` (UUIDv7), `tenant_id`, `business_book` fixed to `ASSUMED`,
-  `assumed_claim_number` (`RNS-YYYY-NNNNNNN`), `contract_id`, `cedent_claim_number`, `status`,
-  `loss_date`, `report_date`, `reserve_amount`, `reserve_currency`, `version`, `created_at`, and
-  `updated_at`. Check constraints enforce `report_date >= loss_date`, non-negative reserves, and
-  the ASSUMED book.
-- Internal API: `GET /internal/v1/assumed-claims`, `GET /internal/v1/assumed-claims/{id}`,
-  `POST /internal/v1/assumed-claims`, and `POST /internal/v1/assumed-claims/{id}/status`.
+- Tables: `assumed_claim`, `assumed_loss_advice`, `assumed_bordereau`,
+  `assumed_reserve_history`, `assumed_cash_call`, `assumed_recovery`, `assumed_commutation`,
+  `assumed_dispute`, and the append-only `assumed_claim_audit`. All DDL in
+  `schema.sql` is idempotent, and an UPDATE/DELETE on the audit table is refused by a database
+  trigger.
+- Internal API under `/internal/v1/assumed-claims`:
+  - claims: list, get, create, `POST /{id}/status`, `POST /{id}/close`,
+    `GET /{id}/financials`, `GET /{id}/audit`;
+  - advice: `GET|POST /{id}/advices`, `POST /{id}/advices/{adviceId}/accept`,
+    `GET|POST /{id}/bordereaux`;
+  - reserves: `GET|POST /{id}/reserves`;
+  - cash: `GET|POST /{id}/cash-calls`;
+  - recoveries: `GET|POST /{id}/recoveries`;
+  - commutation: `GET /{id}/commutation`, `POST /{id}/commute`;
+  - disputes: `GET|POST /{id}/disputes`, `POST /{id}/disputes/{disputeId}/resolve`.
 - The book wall is enforced on every `/internal/v1/**` call. A request without
   `X-EIA-Book: ASSUMED` receives a structured `404` (`EIA-RNS-7005`), never `403`.
-- The status lifecycle from SPEC §11.5.6 is enforced with optimistic `version` concurrency.
-- Errors are structured `Problem`-shaped JSON for `400`, `404`, `409`, and `415`/`405` cases.
+- Invariants enforced transactionally:
+  - advice numbers are unique per claim, and a claim cannot be opened without a `POSTED`
+    (accepted) advice; bordereau batches are idempotent by reference and content hash and report
+    duplicate lines instead of overwriting them (RNS-02);
+  - reserves are append-only history; the current reserve is the sum of the current component rows.
+    Negative amounts, stale effective dates, and missing reasons are rejected; IBNR and large
+    movements require actuarial/senior/underwriting authority and a named approver (RNS-04/05);
+  - a cash call cannot exceed the current reserve net of outstanding cash calls (RNS-09);
+  - a recovery cannot exceed the ceded advised/paid loss, including prior recoveries (RNS-10);
+  - commutation requires a named claims or underwriter approver plus a signed release; an open
+    dispute or an unresolved advice blocks it, and execution releases current reserves and closes
+    the claim (RNS-08/11);
+  - closure is blocked by an open dispute, a current reserve, an unresolved advice, or an
+    outstanding cash call (RNS-11/12).
+- Money is stored as `numeric(19,4)` and serialized as a decimal string; every money-bearing DTO
+  normalizes to four fractional digits.
+- Errors are structured `Problem`-shaped JSON for `400`, `404`, `409`, `422`, and `428` cases.
 
 ## Local run
 
@@ -50,12 +73,15 @@ Create the database once with
 
 ## Verification
 
-- Lint and format
-- Unit tests with 100% business-logic coverage where applicable
-- Contract tests
-- Integration or Playwright tests where applicable
-- Security scan and SBOM
-- Build and publish
+- Unit and controller tests: `.\gradlew.bat test` (105 tests).
+- Live PostgreSQL smoke: creates a dedicated `eia_assumed_live` database and exercises
+  advice -> reserve -> cash call -> recovery, the open gate, recovery cap, append-only audit,
+  dispute blocking, commutation closure, and bordereau duplicate/replay:
+
+```powershell
+$env:EIA_LIVE_POSTGRES='true'
+.\gradlew.bat liveTest
+```
 
 ## Notes
 

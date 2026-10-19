@@ -8,3 +8,10 @@
 6. Add Docker image build and Helm values for the target environment.
 7. Publish OpenAPI/AsyncAPI contracts to `eia-contracts`.
 8. Add the service to the release manifest.
+
+## Implemented
+
+- Claim aggregate, lifecycle, ASSUMED wall, structured errors.
+- Loss advice and bordereau ingestion, append-only reserve history, cash calls, recoveries,
+  commutation, disputes, financial projection, and append-only audit.
+- JUnit invariants/controllers and live PostgreSQL smoke test (`liveTest`).

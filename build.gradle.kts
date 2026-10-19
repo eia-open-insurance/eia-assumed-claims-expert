@@ -26,6 +26,19 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-test")
 }
 
-tasks.withType<Test> {
-    useJUnitPlatform()
+tasks.test {
+    useJUnitPlatform {
+        excludeTags("live")
+    }
+}
+
+val liveTest by tasks.registering(Test::class) {
+    description = "Runs the live PostgreSQL smoke test (requires EIA_LIVE_POSTGRES=true)."
+    group = "verification"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    useJUnitPlatform {
+        includeTags("live")
+    }
+    shouldRunAfter(tasks.test)
 }
