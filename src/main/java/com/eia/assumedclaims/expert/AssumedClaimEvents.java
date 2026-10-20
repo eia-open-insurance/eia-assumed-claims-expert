@@ -40,6 +40,14 @@ import java.util.UUID;
  * the canonical envelope requires {@code aggregateVersion >= 1}; the event
  * aggregate version is therefore the row version plus one (create -&gt; 1,
  * each subsequent material write -&gt; the next integer).</p>
+ *
+ * <p>Claim tasks and notes are children of the same aggregate. Their writes bump
+ * the claim row version too, so {@code assumed.claim.task-created},
+ * {@code assumed.claim.task-completed}, {@code assumed.claim.task-updated}, and
+ * {@code assumed.claim.note-added} stay monotonic with the claim lifecycle
+ * events. These four names are new in this slice and are not yet present in
+ * {@code eia-contracts/asyncapi}; the contracts repository is owned separately
+ * and the gap is reported for catalog follow-up.</p>
  */
 final class AssumedClaimEvents {
     static final String REGISTERED = "assumed.claim.registered";
@@ -51,6 +59,10 @@ final class AssumedClaimEvents {
     static final String CASH_CALL_REQUESTED = "assumed.claim.cash-call-requested";
     static final String RECOVERY_RECORDED = "assumed.claim.recovery-recorded";
     static final String COMMUTED = "assumed.claim.commuted";
+    static final String TASK_CREATED = "assumed.claim.task-created";
+    static final String TASK_COMPLETED = "assumed.claim.task-completed";
+    static final String TASK_UPDATED = "assumed.claim.task-updated";
+    static final String NOTE_ADDED = "assumed.claim.note-added";
 
     private static final Book EVENT_BOOK = Book.ASSUMED;
     private static final String VERTICAL = "assumed";
@@ -192,6 +204,72 @@ final class AssumedClaimEvents {
         data.put("executedAt", instant(commutation.executedAt()));
 
         return envelope(closed, COMMUTED, closed.version() + 1L, now, data);
+    }
+
+    /**
+     * Task creation. The task starts at version 1 and the claim version is
+     * bumped by {@code touch} in the same transaction, so the next-version
+     * identity and aggregate version describe the post-write claim row.
+     */
+    static EventEnvelope taskCreated(AssumedClaim claim, ClaimTask task, Instant now) {
+        Map<String, Object> data = nextVersionIdentity(claim);
+        data.put("claimStatus", claim.status().name());
+        task(data, task);
+        return envelope(claim, TASK_CREATED, claim.version() + 2L, now, data);
+    }
+
+    /**
+     * Task status change. COMPLETE uses the lifecycle-specific
+     * {@code task-completed}; a cancellation or reopen uses {@code task-updated}
+     * with the before/after status.
+     */
+    static EventEnvelope taskStatusChanged(AssumedClaim claim, ClaimTask before, ClaimTask after,
+                                           Instant now) {
+        Map<String, Object> data = nextVersionIdentity(claim);
+        data.put("claimStatus", claim.status().name());
+        task(data, after);
+        data.put("changedFields", List.of("status"));
+        data.put("from", before.status());
+        data.put("to", after.status());
+        String eventType = "COMPLETE".equals(after.status()) ? TASK_COMPLETED : TASK_UPDATED;
+        return envelope(claim, eventType, claim.version() + 2L, now, data);
+    }
+
+    /**
+     * Append-only note. Notes have no row version of their own; the claim
+     * version keeps the event ordered with the rest of the claim stream.
+     */
+    static EventEnvelope noteAdded(AssumedClaim claim, ClaimNote note, Instant now) {
+        Map<String, Object> data = nextVersionIdentity(claim);
+        data.put("claimStatus", claim.status().name());
+        data.put("noteId", note.id());
+        data.put("noteNumber", note.noteNumber());
+        data.put("noteType", note.noteType());
+        data.put("body", note.body());
+        data.put("author", note.author());
+        data.put("createdAt", instant(note.createdAt()));
+        return envelope(claim, NOTE_ADDED, claim.version() + 2L, now, data);
+    }
+
+    private static void task(Map<String, Object> data, ClaimTask task) {
+        data.put("taskId", task.id());
+        data.put("taskNumber", task.taskNumber());
+        data.put("title", task.title());
+        if (task.description() != null) {
+            data.put("description", task.description());
+        }
+        data.put("status", task.status());
+        data.put("priority", task.priority());
+        data.put("dueDate", date(task.dueDate()));
+        if (task.assignedTo() != null) {
+            data.put("assignedTo", task.assignedTo());
+        }
+        data.put("taskVersion", task.version());
+        data.put("taskCreatedAt", instant(task.createdAt()));
+        data.put("taskUpdatedAt", instant(task.updatedAt()));
+        if (task.completedAt() != null) {
+            data.put("completedAt", instant(task.completedAt()));
+        }
     }
 
     private static String statusEventType(AssumedClaimStatus status) {

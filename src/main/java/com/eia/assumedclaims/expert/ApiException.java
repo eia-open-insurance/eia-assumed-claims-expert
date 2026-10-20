@@ -110,6 +110,50 @@ public class ApiException extends RuntimeException {
         );
     }
 
+    /**
+     * Book-wall rejection used by the public {@code /api/v1} routes. The same
+     * code and body are produced by {@link BookScopeFilter} for
+     * {@code /internal/v1/**}, so a request outside the ASSUMED book cannot
+     * distinguish a missing resource from a forbidden one (SPEC §3.6.2).
+     */
+    public static ApiException bookScope() {
+        return new ApiException(
+                HttpStatus.NOT_FOUND,
+                "EIA-RNS-7005",
+                "NOT_FOUND",
+                "Not found",
+                "No resource is available in the requested book scope.",
+                false,
+                List.of()
+        );
+    }
+
+    public static ApiException taskNotFound(UUID id) {
+        return new ApiException(
+                HttpStatus.NOT_FOUND,
+                "EIA-RNS-7801",
+                "NOT_FOUND",
+                "Claim task not found",
+                "Claim task " + id + " was not found for this assumed claim.",
+                false,
+                List.of()
+        );
+    }
+
+    public static ApiException taskVersionConflict(long expectedVersion) {
+        return new ApiException(
+                HttpStatus.CONFLICT,
+                "EIA-RNS-7802",
+                "CONFLICT",
+                "Task version conflict",
+                "Claim task was modified by another request; expected version "
+                        + expectedVersion + ".",
+                true,
+                List.of(new FieldIssue("version", "STALE_TASK_VERSION",
+                        "version must match the current task version"))
+        );
+    }
+
     public static ApiException adviceNotFound(UUID id) {
         return new ApiException(
                 HttpStatus.NOT_FOUND,

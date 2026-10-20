@@ -14,9 +14,12 @@
 - Claim aggregate, lifecycle, ASSUMED wall, structured errors.
 - Loss advice and bordereau ingestion, append-only reserve history, cash calls, recoveries,
   commutation, disputes, financial projection, and append-only audit.
+- Claim tasks (optimistic version, open-first due-date ordering, COMPLETE/CANCELLED transitions)
+  and append-only diary notes (newest first) under both the public `/api/v1` prefix and the
+  internal expert alias, with 404 outside the tenant or ASSUMED book.
 - Transactional outbox production (`com.eia:libs`): claim registration, status changes
-  (including close/reopen), accepted loss advice, reserve changes, cash calls, recoveries, and
-  commutations write their canonical event in the aggregate transaction. Quartz schedules
-  dispatch only when `eia.outbox.enabled=true`.
+  (including close/reopen), accepted loss advice, reserve changes, cash calls, recoveries,
+  commutations, task lifecycle changes, and notes write their canonical event in the aggregate
+  transaction. Quartz schedules dispatch only when `eia.outbox.enabled=true`.
 - JUnit invariants/controllers, H2 outbox transaction/payload tests, and live PostgreSQL smoke
   test (`liveTest`).

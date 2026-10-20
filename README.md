@@ -26,9 +26,9 @@ Assumed Claims persistence, invariants, read models, batch jobs, Quartz schedule
 - Spring Boot 3.4.0 on Java 22, listening on port `8089`, database `eia_assumed`.
 - Tables: `assumed_claim`, `assumed_loss_advice`, `assumed_bordereau`,
   `assumed_reserve_history`, `assumed_cash_call`, `assumed_recovery`, `assumed_commutation`,
-  `assumed_dispute`, and the append-only `assumed_claim_audit`. All DDL in
-  `schema.sql` is idempotent, and an UPDATE/DELETE on the audit table is refused by a database
-  trigger.
+  `assumed_dispute`, `claim_task`, `claim_note`, and the append-only `assumed_claim_audit`.
+  All DDL in `schema.sql` is idempotent, and an UPDATE/DELETE on the audit table is refused by a
+  database trigger.
 - Internal API under `/internal/v1/assumed-claims`:
   - claims: list, get, create, `POST /{id}/status`, `POST /{id}/close`,
     `GET /{id}/financials`, `GET /{id}/audit`;
@@ -38,7 +38,15 @@ Assumed Claims persistence, invariants, read models, batch jobs, Quartz schedule
   - cash: `GET|POST /{id}/cash-calls`;
   - recoveries: `GET|POST /{id}/recoveries`;
   - commutation: `GET /{id}/commutation`, `POST /{id}/commute`;
-  - disputes: `GET|POST /{id}/disputes`, `POST /{id}/disputes/{disputeId}/resolve`.
+  - disputes: `GET|POST /{id}/disputes`, `POST /{id}/disputes/{disputeId}/resolve`;
+  - tasks: `GET|POST /{id}/tasks`, `PATCH /{id}/tasks/{taskId}`;
+  - notes: `GET|POST /{id}/notes` (append-only; no update or delete route).
+- Claim tasks and notes are also exposed on the public prefix
+  `/api/v1/assumed-claims/claims/{claimId}/tasks` and `.../notes`, with the shorter
+  `/api/v1/assumed-claims/{claimId}/tasks|notes` alias. `GET` accepts either `?tenantId={uuid}`
+  or `X-EIA-Tenant`; writes take `X-EIA-Tenant`. The public routes enforce the ASSUMED book wall
+  in the controller, and every route is tenant- and claim-scoped, so a claim outside the tenant or
+  the ASSUMED book is 404.
 - The book wall is enforced on every `/internal/v1/**` call. A request without
   `X-EIA-Book: ASSUMED` receives a structured `404` (`EIA-RNS-7005`), never `403`.
 - Invariants enforced transactionally:
@@ -54,7 +62,15 @@ Assumed Claims persistence, invariants, read models, batch jobs, Quartz schedule
     dispute or an unresolved advice blocks it, and execution releases current reserves and closes
     the claim (RNS-08/11);
   - closure is blocked by an open dispute, a current reserve, an unresolved advice, or an
-    outstanding cash call (RNS-11/12).
+    outstanding cash call (RNS-11/12);
+  - claim tasks start `OPEN` at version 1 and accept only `OPEN` <-> `COMPLETE`/`CANCELLED`
+    transitions; `PATCH` requires the observed task version (a stale version is 409), completion
+    stamps `completed_at`, and repeating the current status is an idempotent no-op. Tasks are
+    listed open-first by due date, then cancelled, then most recently completed. Notes are
+    append-only and listed newest first.
+  - Task and note writes append `assumed.claim.task-created`, `assumed.claim.task-completed`,
+    `assumed.claim.task-updated`, or `assumed.claim.note-added` to the transactional outbox in the
+    same transaction and bump the parent claim version; rollback tests cover both resources.
 - Money is stored as `numeric(19,4)` and serialized as a decimal string; every money-bearing DTO
   normalizes to four fractional digits.
 - Errors are structured `Problem`-shaped JSON for `400`, `404`, `409`, `422`, and `428` cases.
@@ -73,7 +89,7 @@ Create the database once with
 
 ## Verification
 
-- Unit and controller tests: `.\gradlew.bat test` (105 tests).
+- Unit and controller tests: `.\gradlew.bat test` (159 tests).
 - Live PostgreSQL smoke: creates a dedicated `eia_assumed_live` database and exercises
   advice -> reserve -> cash call -> recovery, the open gate, recovery cap, append-only audit,
   dispute blocking, commutation closure, and bordereau duplicate/replay:

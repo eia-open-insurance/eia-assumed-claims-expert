@@ -7,6 +7,8 @@ CREATE SEQUENCE IF NOT EXISTS assumed_claim_number_seq START 1;
 CREATE SEQUENCE IF NOT EXISTS assumed_cash_call_number_seq START 1;
 CREATE SEQUENCE IF NOT EXISTS assumed_commutation_number_seq START 1;
 CREATE SEQUENCE IF NOT EXISTS assumed_dispute_number_seq START 1;
+CREATE SEQUENCE IF NOT EXISTS assumed_claim_task_number_seq START 1;
+CREATE SEQUENCE IF NOT EXISTS assumed_claim_note_number_seq START 1;
 
 CREATE TABLE IF NOT EXISTS assumed_claim (
     id UUID PRIMARY KEY,
@@ -262,6 +264,51 @@ CREATE INDEX IF NOT EXISTS ix_assumed_dispute_claim
     ON assumed_dispute (tenant_id, assumed_claim_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS ix_assumed_dispute_status
     ON assumed_dispute (tenant_id, assumed_claim_id, status);
+
+CREATE TABLE IF NOT EXISTS claim_task (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL,
+    assumed_claim_id UUID NOT NULL REFERENCES assumed_claim (id) ON DELETE CASCADE,
+    task_number VARCHAR(32) NOT NULL,
+    title VARCHAR(200) NOT NULL,
+    description TEXT,
+    due_date DATE NOT NULL,
+    priority VARCHAR(16) NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'OPEN',
+    assigned_to VARCHAR(120),
+    version BIGINT NOT NULL DEFAULT 1,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    completed_at TIMESTAMP WITH TIME ZONE,
+    CONSTRAINT uq_claim_task_number UNIQUE (tenant_id, task_number),
+    CONSTRAINT ck_claim_task_priority CHECK (priority IN ('LOW', 'NORMAL', 'HIGH', 'URGENT')),
+    CONSTRAINT ck_claim_task_status CHECK (status IN ('OPEN', 'COMPLETE', 'CANCELLED')),
+    CONSTRAINT ck_claim_task_completed CHECK (
+        (status = 'COMPLETE' AND completed_at IS NOT NULL)
+        OR (status <> 'COMPLETE' AND completed_at IS NULL))
+);
+
+CREATE INDEX IF NOT EXISTS ix_claim_task_status_due
+    ON claim_task (tenant_id, assumed_claim_id, status, due_date);
+CREATE INDEX IF NOT EXISTS ix_claim_task_created
+    ON claim_task (tenant_id, assumed_claim_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS claim_note (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL,
+    assumed_claim_id UUID NOT NULL REFERENCES assumed_claim (id) ON DELETE CASCADE,
+    note_number VARCHAR(32) NOT NULL,
+    note_type VARCHAR(24) NOT NULL,
+    body TEXT NOT NULL,
+    author VARCHAR(120) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    CONSTRAINT uq_claim_note_number UNIQUE (tenant_id, note_number),
+    CONSTRAINT ck_claim_note_type CHECK (note_type IN (
+        'DIARY', 'COVERAGE', 'RESERVE', 'LITIGATION', 'SETTLEMENT', 'GENERAL'))
+);
+
+CREATE INDEX IF NOT EXISTS ix_claim_note_created
+    ON claim_note (tenant_id, assumed_claim_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS assumed_claim_audit (
     id UUID PRIMARY KEY,
