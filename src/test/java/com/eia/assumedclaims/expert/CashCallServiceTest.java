@@ -1,5 +1,6 @@
 package com.eia.assumedclaims.expert;
 
+import com.eia.platform.libs.outbox.OutboxRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -38,12 +39,14 @@ class CashCallServiceTest {
     private ClaimAuditRepository audit;
     @Mock
     private NumberSequences numbers;
+    @Mock
+    private OutboxRepository outbox;
 
     private CashCallService service;
 
     @BeforeEach
     void setUp() {
-        service = new CashCallService(claimService, cashCalls, reserves, claims, audit, numbers);
+        service = new CashCallService(claimService, cashCalls, reserves, claims, audit, numbers, outbox);
     }
 
     @Test

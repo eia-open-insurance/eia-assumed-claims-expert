@@ -1,5 +1,7 @@
 package com.eia.assumedclaims.expert;
 
+import com.eia.platform.libs.outbox.OutboxEvent;
+import com.eia.platform.libs.outbox.OutboxRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -16,16 +18,19 @@ public class LossAdviceService {
     private final LossAdviceRepository advices;
     private final AssumedClaimRepository claims;
     private final ClaimAuditRepository audit;
+    private final OutboxRepository outbox;
 
     public LossAdviceService(
             AssumedClaimService claimService,
             LossAdviceRepository advices,
             AssumedClaimRepository claims,
-            ClaimAuditRepository audit) {
+            ClaimAuditRepository audit,
+            OutboxRepository outbox) {
         this.claimService = claimService;
         this.advices = advices;
         this.claims = claims;
         this.audit = audit;
+        this.outbox = outbox;
     }
 
     public List<LossAdvice> list(UUID tenantId, UUID claimId) {
@@ -102,7 +107,7 @@ public class LossAdviceService {
 
     @Transactional
     public LossAdvice accept(UUID tenantId, UUID claimId, UUID adviceId, AcceptAdviceRequest request, String actor) {
-        claimService.requireClaim(tenantId, claimId);
+        AssumedClaim claim = claimService.requireClaim(tenantId, claimId);
         LossAdvice advice = advices.findById(tenantId, claimId, adviceId)
                 .orElseThrow(() -> ApiException.adviceNotFound(adviceId));
         if (advice.status() == AdviceStatus.POSTED) {
@@ -116,6 +121,8 @@ public class LossAdviceService {
         String note = request != null && StringUtils.hasText(request.note()) ? " " + request.note().trim() : "";
         audit.append(tenantId, claimId, AuditEventType.LOSS_ADVICE_ACCEPTED, actor,
                 "Accepted advice " + advice.adviceNumber() + note);
+        outbox.insert(OutboxEvent.fromEnvelope(
+                AssumedClaimEvents.lossAdvicePosted(claim, accepted, Instant.now())));
         return accepted;
     }
 

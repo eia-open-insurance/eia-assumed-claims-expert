@@ -1,5 +1,6 @@
 package com.eia.assumedclaims.expert;
 
+import com.eia.platform.libs.outbox.OutboxRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -41,12 +42,14 @@ class AssumedClaimServiceTest {
     private DisputeRepository disputes;
     @Mock
     private ClaimAuditRepository audit;
+    @Mock
+    private OutboxRepository outbox;
 
     private AssumedClaimService service;
 
     @BeforeEach
     void setUp() {
-        service = new AssumedClaimService(claims, reserves, advices, cashCalls, disputes, audit);
+        service = new AssumedClaimService(claims, reserves, advices, cashCalls, disputes, audit, outbox);
     }
 
     @Test

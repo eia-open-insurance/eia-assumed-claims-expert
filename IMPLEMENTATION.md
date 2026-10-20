@@ -14,4 +14,9 @@
 - Claim aggregate, lifecycle, ASSUMED wall, structured errors.
 - Loss advice and bordereau ingestion, append-only reserve history, cash calls, recoveries,
   commutation, disputes, financial projection, and append-only audit.
-- JUnit invariants/controllers and live PostgreSQL smoke test (`liveTest`).
+- Transactional outbox production (`com.eia:libs`): claim registration, status changes
+  (including close/reopen), accepted loss advice, reserve changes, cash calls, recoveries, and
+  commutations write their canonical event in the aggregate transaction. Quartz schedules
+  dispatch only when `eia.outbox.enabled=true`.
+- JUnit invariants/controllers, H2 outbox transaction/payload tests, and live PostgreSQL smoke
+  test (`liveTest`).

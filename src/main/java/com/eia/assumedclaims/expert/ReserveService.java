@@ -1,5 +1,7 @@
 package com.eia.assumedclaims.expert;
 
+import com.eia.platform.libs.outbox.OutboxEvent;
+import com.eia.platform.libs.outbox.OutboxRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,16 +22,19 @@ public class ReserveService {
     private final ReserveRepository reserves;
     private final AssumedClaimRepository claims;
     private final ClaimAuditRepository audit;
+    private final OutboxRepository outbox;
 
     public ReserveService(
             AssumedClaimService claimService,
             ReserveRepository reserves,
             AssumedClaimRepository claims,
-            ClaimAuditRepository audit) {
+            ClaimAuditRepository audit,
+            OutboxRepository outbox) {
         this.claimService = claimService;
         this.reserves = reserves;
         this.claims = claims;
         this.audit = audit;
+        this.outbox = outbox;
     }
 
     public List<ReserveHistoryEntry> list(UUID tenantId, UUID claimId) {
@@ -122,6 +127,8 @@ public class ReserveService {
                         + entry.amount().toPlainString() + " " + entry.currency()
                         + " from " + entry.effectiveDate() + " (" + entry.reasonCode() + ", "
                         + entry.authority() + ")");
+        outbox.insert(OutboxEvent.fromEnvelope(AssumedClaimEvents.reserveChanged(
+                claim, entry, claim.reserveAmount(), total, Instant.now())));
         return entry;
     }
 

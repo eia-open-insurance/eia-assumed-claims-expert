@@ -1,5 +1,7 @@
 package com.eia.assumedclaims.expert;
 
+import com.eia.platform.libs.outbox.OutboxEvent;
+import com.eia.platform.libs.outbox.OutboxRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,18 +21,21 @@ public class RecoveryService {
     private final LossAdviceRepository advices;
     private final AssumedClaimRepository claims;
     private final ClaimAuditRepository audit;
+    private final OutboxRepository outbox;
 
     public RecoveryService(
             AssumedClaimService claimService,
             RecoveryRepository recoveries,
             LossAdviceRepository advices,
             AssumedClaimRepository claims,
-            ClaimAuditRepository audit) {
+            ClaimAuditRepository audit,
+            OutboxRepository outbox) {
         this.claimService = claimService;
         this.recoveries = recoveries;
         this.advices = advices;
         this.claims = claims;
         this.audit = audit;
+        this.outbox = outbox;
     }
 
     public List<Recovery> list(UUID tenantId, UUID claimId) {
@@ -93,6 +98,8 @@ public class RecoveryService {
         audit.append(tenantId, claimId, AuditEventType.RECOVERY_RECORDED, actor,
                 "Recovery " + recovery.recoveryType() + " of " + recovery.amount().toPlainString()
                         + " " + recovery.currency() + " (" + recovery.status() + ")");
+        outbox.insert(OutboxEvent.fromEnvelope(
+                AssumedClaimEvents.recoveryRecorded(claim, recovery, Instant.now())));
         return recovery;
     }
 }

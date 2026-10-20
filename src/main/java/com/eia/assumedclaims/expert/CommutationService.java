@@ -1,5 +1,7 @@
 package com.eia.assumedclaims.expert;
 
+import com.eia.platform.libs.outbox.OutboxEvent;
+import com.eia.platform.libs.outbox.OutboxRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,6 +23,7 @@ public class CommutationService {
     private final AssumedClaimRepository claims;
     private final ClaimAuditRepository audit;
     private final NumberSequences numbers;
+    private final OutboxRepository outbox;
 
     public CommutationService(
             AssumedClaimService claimService,
@@ -30,7 +33,8 @@ public class CommutationService {
             LossAdviceRepository advices,
             AssumedClaimRepository claims,
             ClaimAuditRepository audit,
-            NumberSequences numbers) {
+            NumberSequences numbers,
+            OutboxRepository outbox) {
         this.claimService = claimService;
         this.commutations = commutations;
         this.reserves = reserves;
@@ -39,6 +43,7 @@ public class CommutationService {
         this.claims = claims;
         this.audit = audit;
         this.numbers = numbers;
+        this.outbox = outbox;
     }
 
     public Commutation get(UUID tenantId, UUID claimId) {
@@ -122,6 +127,8 @@ public class CommutationService {
                 "Commutation " + commutation.commutationNumber() + " accepted "
                         + accepted.toPlainString() + " " + commutation.currency()
                         + "; claim " + closed.status() + " (release " + request.releaseDocumentId() + ")");
+        outbox.insert(OutboxEvent.fromEnvelope(AssumedClaimEvents.commuted(
+                closed, commutation, claim.reserveAmount(), Instant.now())));
         return commutation;
     }
 }

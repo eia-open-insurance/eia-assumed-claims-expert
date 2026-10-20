@@ -1,5 +1,7 @@
 package com.eia.assumedclaims.expert;
 
+import com.eia.platform.libs.outbox.OutboxEvent;
+import com.eia.platform.libs.outbox.OutboxRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -13,6 +15,10 @@ import java.util.UUID;
 /**
  * Claim aggregate operations and lifecycle gates. The service, not the controller, enforces the
  * invariants so an internal direct call cannot bypass them.
+ *
+ * <p>Every aggregate write also appends its canonical event to the transactional outbox in the
+ * same transaction (SPEC 7.5.1). A rollback therefore leaves neither the claim mutation nor the
+ * event behind.</p>
  */
 @Service
 public class AssumedClaimService {
@@ -24,6 +30,7 @@ public class AssumedClaimService {
     private final CashCallRepository cashCalls;
     private final DisputeRepository disputes;
     private final ClaimAuditRepository audit;
+    private final OutboxRepository outbox;
 
     public AssumedClaimService(
             AssumedClaimRepository claims,
@@ -31,13 +38,15 @@ public class AssumedClaimService {
             LossAdviceRepository advices,
             CashCallRepository cashCalls,
             DisputeRepository disputes,
-            ClaimAuditRepository audit) {
+            ClaimAuditRepository audit,
+            OutboxRepository outbox) {
         this.claims = claims;
         this.reserves = reserves;
         this.advices = advices;
         this.cashCalls = cashCalls;
         this.disputes = disputes;
         this.audit = audit;
+        this.outbox = outbox;
     }
 
     public List<AssumedClaim> list(UUID tenantId) {
@@ -55,9 +64,11 @@ public class AssumedClaimService {
         LocalDate effectiveDate = request.reportDate() != null
                 ? request.reportDate()
                 : request.lossDate() != null ? request.lossDate() : LocalDate.now();
-        reserveInitial(claim, effectiveDate, request.reserveAmount(), request.reserveCurrency());        audit.append(request.tenantId(), claim.id(), AuditEventType.CLAIM_REGISTERED, actor,
+        reserveInitial(claim, effectiveDate, request.reserveAmount(), request.reserveCurrency());
+        audit.append(request.tenantId(), claim.id(), AuditEventType.CLAIM_REGISTERED, actor,
                 "Registered " + claim.assumedClaimNumber() + " with initial reserve "
                         + request.reserveAmount().toPlainString() + " " + request.reserveCurrency());
+        outbox.insert(OutboxEvent.fromEnvelope(AssumedClaimEvents.registered(claim, Instant.now())));
         return claim;
     }
 
@@ -90,6 +101,8 @@ public class AssumedClaimService {
                 : AuditEventType.CLAIM_STATUS_CHANGED;
         audit.append(tenantId, id, eventType, actor,
                 "Status " + current.status() + " -> " + targetStatus);
+        outbox.insert(OutboxEvent.fromEnvelope(
+                AssumedClaimEvents.statusChanged(current, updated, Instant.now())));
         return updated;
     }
 
@@ -106,6 +119,8 @@ public class AssumedClaimService {
         AssumedClaim closed = claims.changeStatus(tenantId, id, AssumedClaimStatus.CLOSED, current.version());
         audit.append(tenantId, id, AuditEventType.CLAIM_CLOSED, actor,
                 "Status " + current.status() + " -> CLOSED");
+        outbox.insert(OutboxEvent.fromEnvelope(
+                AssumedClaimEvents.statusChanged(current, closed, Instant.now())));
         return closed;
     }
 

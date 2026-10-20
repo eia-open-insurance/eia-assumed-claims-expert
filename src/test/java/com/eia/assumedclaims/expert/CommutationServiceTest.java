@@ -1,5 +1,6 @@
 package com.eia.assumedclaims.expert;
 
+import com.eia.platform.libs.outbox.OutboxRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -43,13 +44,15 @@ class CommutationServiceTest {
     private ClaimAuditRepository audit;
     @Mock
     private NumberSequences numbers;
+    @Mock
+    private OutboxRepository outbox;
 
     private CommutationService service;
 
     @BeforeEach
     void setUp() {
         service = new CommutationService(claimService, commutations, reserves, disputes, advices,
-                claims, audit, numbers);
+                claims, audit, numbers, outbox);
     }
 
     @Test

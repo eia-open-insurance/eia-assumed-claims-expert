@@ -1,5 +1,7 @@
 package com.eia.assumedclaims.expert;
 
+import com.eia.platform.libs.outbox.OutboxEvent;
+import com.eia.platform.libs.outbox.OutboxRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -23,6 +25,7 @@ public class CashCallService {
     private final AssumedClaimRepository claims;
     private final ClaimAuditRepository audit;
     private final NumberSequences numbers;
+    private final OutboxRepository outbox;
 
     public CashCallService(
             AssumedClaimService claimService,
@@ -30,13 +33,15 @@ public class CashCallService {
             ReserveRepository reserves,
             AssumedClaimRepository claims,
             ClaimAuditRepository audit,
-            NumberSequences numbers) {
+            NumberSequences numbers,
+            OutboxRepository outbox) {
         this.claimService = claimService;
         this.cashCalls = cashCalls;
         this.reserves = reserves;
         this.claims = claims;
         this.audit = audit;
         this.numbers = numbers;
+        this.outbox = outbox;
     }
 
     public List<CashCall> list(UUID tenantId, UUID claimId) {
@@ -114,6 +119,8 @@ public class CashCallService {
         audit.append(tenantId, claimId, AuditEventType.CASH_CALL_REQUESTED, actor,
                 "Cash call " + call.requestNumber() + " for " + call.requestedAmount().toPlainString()
                         + " " + call.currency() + " (" + call.status() + ")");
+        outbox.insert(OutboxEvent.fromEnvelope(
+                AssumedClaimEvents.cashCallRequested(claim, call, Instant.now())));
         return call;
     }
 
