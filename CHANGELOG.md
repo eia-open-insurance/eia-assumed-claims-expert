@@ -36,3 +36,15 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
   - The reservation shares the command transaction, so rollback leaves no key behind.
   - H2 integration tests cover task/note replay, conflict, missing key, tenant and command-type
     scoping, rollback, and event counts.
+- Claim assignment:
+  - `assigned_adjuster`, `assigned_team`, `assigned_at`, and `assigned_by` on `assumed_claim`,
+    added with idempotent `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` statements in both the
+    PostgreSQL and H2 schemas.
+  - `PATCH /api/v1/assumed-claims/claims/{claimId}/assignment` with the shorter public and
+    internal aliases, the ASSUMED book wall, an optimistic `expectedVersion` (409
+    `EIA-RNS-7006` on a stale value), an optional team, and a same-assignment no-op.
+  - `assumed.claim.assigned` written in the same transaction as the assignment, carrying the
+    previous and new owner, `assignedAt`, and `assignedBy`; rollback tests prove the assignment,
+    audit entry, and event commit or roll back together.
+  - The claim projection and list/search expose `assignedAdjuster`, `assignedTeam`, and
+    `assignedAt`, and list accepts `assignedAdjuster`/`assignedTeam` filters.

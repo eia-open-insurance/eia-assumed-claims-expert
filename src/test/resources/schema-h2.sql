@@ -22,6 +22,10 @@ CREATE TABLE IF NOT EXISTS assumed_claim (
     report_date DATE,
     reserve_amount NUMERIC(19, 4) NOT NULL DEFAULT 0,
     reserve_currency CHAR(3) NOT NULL DEFAULT 'USD',
+    assigned_adjuster VARCHAR(128),
+    assigned_team VARCHAR(64),
+    assigned_at TIMESTAMP WITH TIME ZONE,
+    assigned_by VARCHAR(128),
     version INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL,
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
@@ -32,8 +36,19 @@ CREATE TABLE IF NOT EXISTS assumed_claim (
     CONSTRAINT ck_assumed_claim_currency CHECK (CHAR_LENGTH(reserve_currency) = 3)
 );
 
+-- Forward-only addition of the claim assignment fields, mirroring schema.sql.
+-- H2 supports ADD COLUMN IF NOT EXISTS in PostgreSQL mode, so re-running the
+-- script stays idempotent for an existing in-memory database.
+ALTER TABLE assumed_claim ADD COLUMN IF NOT EXISTS assigned_adjuster VARCHAR(128);
+ALTER TABLE assumed_claim ADD COLUMN IF NOT EXISTS assigned_team VARCHAR(64);
+ALTER TABLE assumed_claim ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE assumed_claim ADD COLUMN IF NOT EXISTS assigned_by VARCHAR(128);
+
 CREATE INDEX IF NOT EXISTS ix_assumed_claim_tenant_status
     ON assumed_claim (tenant_id, status);
+
+CREATE INDEX IF NOT EXISTS ix_assumed_claim_tenant_assignment
+    ON assumed_claim (tenant_id, assigned_team, assigned_adjuster);
 
 CREATE TABLE IF NOT EXISTS assumed_bordereau (
     id UUID PRIMARY KEY,

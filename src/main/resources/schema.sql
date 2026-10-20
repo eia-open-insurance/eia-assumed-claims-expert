@@ -20,6 +20,10 @@ CREATE TABLE IF NOT EXISTS assumed_claim (
     report_date DATE,
     reserve_amount NUMERIC(19, 4) NOT NULL DEFAULT 0,
     reserve_currency CHAR(3) NOT NULL DEFAULT 'USD',
+    assigned_adjuster VARCHAR(128),
+    assigned_team VARCHAR(64),
+    assigned_at TIMESTAMPTZ,
+    assigned_by VARCHAR(128),
     version INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL,
@@ -30,8 +34,19 @@ CREATE TABLE IF NOT EXISTS assumed_claim (
     CONSTRAINT ck_assumed_claim_currency CHECK (reserve_currency ~ '^[A-Z]{3}$')
 );
 
+-- Forward-only addition of the claim assignment fields for databases created
+-- before the assignment slice. ADD COLUMN IF NOT EXISTS keeps re-running the
+-- script idempotent on both a fresh and an existing database.
+ALTER TABLE assumed_claim ADD COLUMN IF NOT EXISTS assigned_adjuster VARCHAR(128);
+ALTER TABLE assumed_claim ADD COLUMN IF NOT EXISTS assigned_team VARCHAR(64);
+ALTER TABLE assumed_claim ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ;
+ALTER TABLE assumed_claim ADD COLUMN IF NOT EXISTS assigned_by VARCHAR(128);
+
 CREATE INDEX IF NOT EXISTS ix_assumed_claim_tenant_status
     ON assumed_claim (tenant_id, status);
+
+CREATE INDEX IF NOT EXISTS ix_assumed_claim_tenant_assignment
+    ON assumed_claim (tenant_id, assigned_team, assigned_adjuster);
 
 CREATE TABLE IF NOT EXISTS assumed_bordereau (
     id UUID PRIMARY KEY,

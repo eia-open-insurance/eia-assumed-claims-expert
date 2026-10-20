@@ -27,8 +27,11 @@ public class AssumedClaimController {
     }
 
     @GetMapping
-    public List<AssumedClaim> list(@RequestParam UUID tenantId) {
-        return service.list(tenantId);
+    public List<AssumedClaim> list(
+            @RequestParam UUID tenantId,
+            @RequestParam(value = "assignedAdjuster", required = false) String assignedAdjuster,
+            @RequestParam(value = "assignedTeam", required = false) String assignedTeam) {
+        return service.list(tenantId, assignedAdjuster, assignedTeam);
     }
 
     @GetMapping("/{id}")

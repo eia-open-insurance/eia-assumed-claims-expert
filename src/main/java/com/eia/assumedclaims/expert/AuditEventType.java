@@ -4,6 +4,7 @@ package com.eia.assumedclaims.expert;
 public enum AuditEventType {
     CLAIM_REGISTERED,
     CLAIM_STATUS_CHANGED,
+    CLAIM_ASSIGNED,
     LOSS_ADVICE_RECORDED,
     LOSS_ADVICE_ACCEPTED,
     BORDEREAU_INGESTED,

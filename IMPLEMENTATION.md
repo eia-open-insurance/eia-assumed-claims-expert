@@ -28,3 +28,8 @@
   transaction. Quartz schedules dispatch only when `eia.outbox.enabled=true`.
 - JUnit invariants/controllers, H2 outbox transaction/payload tests, and live PostgreSQL smoke
   test (`liveTest`).
+- Claim assignment on `assumed_claim` (`assigned_adjuster`, `assigned_team`, `assigned_at`,
+  `assigned_by`) with idempotent PostgreSQL/H2 ALTERs, `PATCH .../assignment` on the public,
+  short-public, and internal routes, the ASSUMED wall, optimistic 409, and a same-assignment
+  no-op. A real change writes the audit entry and `assumed.claim.assigned` in the aggregate
+  transaction; the claim projection and list filters expose the assignment fields.

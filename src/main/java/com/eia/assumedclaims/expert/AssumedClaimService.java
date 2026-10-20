@@ -2,11 +2,13 @@ package com.eia.assumedclaims.expert;
 
 import com.eia.platform.libs.outbox.OutboxEvent;
 import com.eia.platform.libs.outbox.OutboxRepository;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
@@ -31,7 +33,9 @@ public class AssumedClaimService {
     private final DisputeRepository disputes;
     private final ClaimAuditRepository audit;
     private final OutboxRepository outbox;
+    private final Clock clock;
 
+    @Autowired
     public AssumedClaimService(
             AssumedClaimRepository claims,
             ReserveRepository reserves,
@@ -40,6 +44,18 @@ public class AssumedClaimService {
             DisputeRepository disputes,
             ClaimAuditRepository audit,
             OutboxRepository outbox) {
+        this(claims, reserves, advices, cashCalls, disputes, audit, outbox, Clock.systemUTC());
+    }
+
+    AssumedClaimService(
+            AssumedClaimRepository claims,
+            ReserveRepository reserves,
+            LossAdviceRepository advices,
+            CashCallRepository cashCalls,
+            DisputeRepository disputes,
+            ClaimAuditRepository audit,
+            OutboxRepository outbox,
+            Clock clock) {
         this.claims = claims;
         this.reserves = reserves;
         this.advices = advices;
@@ -47,10 +63,19 @@ public class AssumedClaimService {
         this.disputes = disputes;
         this.audit = audit;
         this.outbox = outbox;
+        this.clock = clock;
     }
 
     public List<AssumedClaim> list(UUID tenantId) {
-        return claims.findAll(tenantId);
+        return list(tenantId, null, null);
+    }
+
+    /**
+     * Claim list/search. The optional assignment filters are exact matches on
+     * the current owner and let a work-queue view select a team or adjuster.
+     */
+    public List<AssumedClaim> list(UUID tenantId, String assignedAdjuster, String assignedTeam) {
+        return claims.findAll(tenantId, assignedAdjuster, assignedTeam);
     }
 
     public AssumedClaim get(UUID tenantId, UUID id) {
@@ -68,7 +93,7 @@ public class AssumedClaimService {
         audit.append(request.tenantId(), claim.id(), AuditEventType.CLAIM_REGISTERED, actor,
                 "Registered " + claim.assumedClaimNumber() + " with initial reserve "
                         + request.reserveAmount().toPlainString() + " " + request.reserveCurrency());
-        outbox.insert(OutboxEvent.fromEnvelope(AssumedClaimEvents.registered(claim, Instant.now())));
+        outbox.insert(OutboxEvent.fromEnvelope(AssumedClaimEvents.registered(claim, Instant.now(clock))));
         return claim;
     }
 
@@ -122,6 +147,46 @@ public class AssumedClaimService {
         outbox.insert(OutboxEvent.fromEnvelope(
                 AssumedClaimEvents.statusChanged(current, closed, Instant.now())));
         return closed;
+    }
+
+    /**
+     * Assigns or reassigns a claim with the claim version as the optimistic
+     * token. A stale version is 409. Repeating the current assignment with the
+     * current version is an idempotent no-op: no version bump, no audit entry,
+     * and no event. A real change bumps the claim version, appends the audit
+     * entry, and writes {@code assumed.claim.assigned} to the outbox in the
+     * same transaction.
+     */
+    @Transactional
+    public AssumedClaim assign(
+            UUID tenantId, UUID claimId, ClaimAssignmentRequest request, String actor) {
+        AssumedClaim current = requireClaim(tenantId, claimId);
+        String assignedAdjuster = TaskNoteVocab.requiredText(
+                request.assignedAdjuster(), "assignedAdjuster", 128);
+        String assignedTeam = TaskNoteVocab.optionalText(request.assignedTeam(), "assignedTeam", 64);
+        int expectedVersion = requireExpectedVersion(request.expectedVersion());
+        if (current.version() != expectedVersion) {
+            throw ApiException.versionConflict(expectedVersion);
+        }
+        // The platform actor header is optional. When it is absent, the
+        // assigned adjuster is the most useful attribution, matching Direct
+        // Claims; it is never silently recorded as an unrelated user.
+        String acting = TaskNoteVocab.optionalText(actor, "actor", 128);
+        String assignedBy = acting == null ? assignedAdjuster : acting;
+        if (assignedAdjuster.equals(current.assignedAdjuster())
+                && java.util.Objects.equals(assignedTeam, current.assignedTeam())) {
+            return current;
+        }
+
+        Instant now = Instant.now(clock);
+        AssumedClaim updated = claims.assign(tenantId, claimId, assignedAdjuster, assignedTeam,
+                        assignedBy, now, expectedVersion)
+                .orElseThrow(() -> ApiException.versionConflict(expectedVersion));
+        audit.append(tenantId, claimId, AuditEventType.CLAIM_ASSIGNED, assignedBy,
+                assignmentDetail(current, updated));
+        outbox.insert(OutboxEvent.fromEnvelope(
+                AssumedClaimEvents.assigned(current, updated, assignedBy, now)));
+        return updated;
     }
 
     public List<ClaimAuditEntry> audit(UUID tenantId, UUID id) {
@@ -180,6 +245,31 @@ public class AssumedClaimService {
 
     static String actor(String value) {
         return StringUtils.hasText(value) ? value.trim() : "system";
+    }
+
+    private static int requireExpectedVersion(Integer expectedVersion) {
+        if (expectedVersion == null) {
+            throw ApiException.validation("expectedVersion is required", List.of(
+                    new FieldIssue("expectedVersion", "REQUIRED", "expectedVersion is required")));
+        }
+        if (expectedVersion < 0) {
+            throw ApiException.validation("expectedVersion must be greater than or equal to zero",
+                    List.of(new FieldIssue("expectedVersion", "NEGATIVE",
+                            "expectedVersion must be greater than or equal to zero")));
+        }
+        return expectedVersion;
+    }
+
+    private static String assignmentDetail(AssumedClaim before, AssumedClaim after) {
+        String previous = before.assignedAdjuster() == null
+                ? "unassigned"
+                : before.assignedAdjuster() + teamSuffix(before.assignedTeam());
+        return "Assigned " + after.assumedClaimNumber() + " to " + after.assignedAdjuster()
+                + teamSuffix(after.assignedTeam()) + " from " + previous;
+    }
+
+    private static String teamSuffix(String team) {
+        return team == null ? "" : " (" + team + ")";
     }
 
     private static BigDecimal zeroIfNull(BigDecimal value) {

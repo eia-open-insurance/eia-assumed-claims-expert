@@ -17,27 +17,34 @@ import java.util.UUID;
 public class AssumedClaimRepository {
     private static final String SELECT_COLUMNS = """
             SELECT id, tenant_id, business_book, assumed_claim_number, contract_id, cedent_claim_number,
-                   status, loss_date, report_date, reserve_amount, reserve_currency, version,
+                   status, loss_date, report_date, reserve_amount, reserve_currency,
+                   assigned_adjuster, assigned_team, assigned_at, version,
                    created_at, updated_at
               FROM assumed_claim
             """;
 
-    private static final RowMapper<AssumedClaim> MAPPER = (rs, rowNum) -> new AssumedClaim(
-            rs.getObject("id", UUID.class),
-            rs.getObject("tenant_id", UUID.class),
-            rs.getString("business_book"),
-            rs.getString("assumed_claim_number"),
-            rs.getObject("contract_id", UUID.class),
-            rs.getString("cedent_claim_number"),
-            AssumedClaimStatus.valueOf(rs.getString("status")),
-            rs.getObject("loss_date", LocalDate.class),
-            rs.getObject("report_date", LocalDate.class),
-            rs.getBigDecimal("reserve_amount"),
-            rs.getString("reserve_currency"),
-            rs.getInt("version"),
-            rs.getTimestamp("created_at").toInstant(),
-            rs.getTimestamp("updated_at").toInstant()
-    );
+    private static final RowMapper<AssumedClaim> MAPPER = (rs, rowNum) -> {
+        Timestamp assignedAt = rs.getTimestamp("assigned_at");
+        return new AssumedClaim(
+                rs.getObject("id", UUID.class),
+                rs.getObject("tenant_id", UUID.class),
+                rs.getString("business_book"),
+                rs.getString("assumed_claim_number"),
+                rs.getObject("contract_id", UUID.class),
+                rs.getString("cedent_claim_number"),
+                AssumedClaimStatus.valueOf(rs.getString("status")),
+                rs.getObject("loss_date", LocalDate.class),
+                rs.getObject("report_date", LocalDate.class),
+                rs.getBigDecimal("reserve_amount"),
+                rs.getString("reserve_currency"),
+                rs.getString("assigned_adjuster"),
+                rs.getString("assigned_team"),
+                assignedAt == null ? null : assignedAt.toInstant(),
+                rs.getInt("version"),
+                rs.getTimestamp("created_at").toInstant(),
+                rs.getTimestamp("updated_at").toInstant()
+        );
+    };
 
     private final JdbcTemplate jdbc;
     private final NumberSequences numbers;
@@ -48,10 +55,29 @@ public class AssumedClaimRepository {
     }
 
     public List<AssumedClaim> findAll(UUID tenantId) {
-        return jdbc.query(SELECT_COLUMNS + """
-                 WHERE tenant_id = ? AND business_book = 'ASSUMED'
-                 ORDER BY created_at DESC, assumed_claim_number DESC
-                """, MAPPER, tenantId);
+        return findAll(tenantId, null, null);
+    }
+
+    /**
+     * Lists ASSUMED-book claims, optionally narrowing to the current assignee.
+     * A blank filter is ignored; the assignment filters are exact matches so a
+     * list/search screen can page by owner or team.
+     */
+    public List<AssumedClaim> findAll(UUID tenantId, String assignedAdjuster, String assignedTeam) {
+        StringBuilder sql = new StringBuilder(SELECT_COLUMNS)
+                .append(" WHERE tenant_id = ? AND business_book = 'ASSUMED'");
+        List<Object> arguments = new java.util.ArrayList<>();
+        arguments.add(tenantId);
+        if (StringUtils.hasText(assignedAdjuster)) {
+            sql.append(" AND assigned_adjuster = ?");
+            arguments.add(assignedAdjuster.trim());
+        }
+        if (StringUtils.hasText(assignedTeam)) {
+            sql.append(" AND assigned_team = ?");
+            arguments.add(assignedTeam.trim());
+        }
+        sql.append(" ORDER BY created_at DESC, assumed_claim_number DESC");
+        return jdbc.query(sql.toString(), MAPPER, arguments.toArray());
     }
 
     public Optional<AssumedClaim> findById(UUID tenantId, UUID id) {
@@ -116,6 +142,39 @@ public class AssumedClaimRepository {
         }
         return findById(tenantId, id)
                 .orElseThrow(() -> ApiException.assumedClaimNotFound(id));
+    }
+
+    /**
+     * Applies an assignment change using the claim row version as the
+     * optimistic-concurrency token. Returns empty when the expected version no
+     * longer matches, which the service maps to the standard 409 conflict.
+     */
+    public Optional<AssumedClaim> assign(UUID tenantId,
+                                         UUID id,
+                                         String assignedAdjuster,
+                                         String assignedTeam,
+                                         String assignedBy,
+                                         Instant assignedAt,
+                                         int expectedVersion) {
+        int updated = jdbc.update("""
+                UPDATE assumed_claim
+                   SET assigned_adjuster = ?, assigned_team = ?, assigned_at = ?, assigned_by = ?,
+                       version = version + 1, updated_at = ?
+                 WHERE id = ? AND tenant_id = ? AND business_book = 'ASSUMED' AND version = ?
+                """,
+                assignedAdjuster,
+                assignedTeam,
+                Timestamp.from(assignedAt),
+                assignedBy,
+                Timestamp.from(assignedAt),
+                id,
+                tenantId,
+                expectedVersion);
+
+        if (updated == 0) {
+            return Optional.empty();
+        }
+        return findById(tenantId, id);
     }
 
     /**

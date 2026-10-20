@@ -72,7 +72,7 @@ class AssumedClaimControllerTest {
 
     @Test
     void listReturnsAssumedClaimsWithStringMoney() throws Exception {
-        given(service.list(TENANT)).willReturn(List.of(claim(AssumedClaimStatus.NOTIFIED, 0)));
+        given(service.list(TENANT, null, null)).willReturn(List.of(claim(AssumedClaimStatus.NOTIFIED, 0)));
 
         mvc.perform(get("/internal/v1/assumed-claims")
                         .header(BookScopeFilter.BOOK_HEADER, ASSUMED)
@@ -82,7 +82,27 @@ class AssumedClaimControllerTest {
                 .andExpect(jsonPath("$[0].businessBook").value(ASSUMED))
                 .andExpect(jsonPath("$[0].status").value("NOTIFIED"))
                 .andExpect(jsonPath("$[0].reserveAmount").value("12500.0000"))
-                .andExpect(jsonPath("$[0].reserveAmount").isString());
+                .andExpect(jsonPath("$[0].reserveAmount").isString())
+                .andExpect(jsonPath("$[0].assignedAdjuster").value("A. Adjuster"))
+                .andExpect(jsonPath("$[0].assignedTeam").value("CASUALTY"))
+                .andExpect(jsonPath("$[0].assignedAt").value("2026-10-19T12:05:00Z"));
+    }
+
+    @Test
+    void listFiltersByCurrentAssignment() throws Exception {
+        given(service.list(TENANT, "A. Adjuster", "CASUALTY"))
+                .willReturn(List.of(claim(AssumedClaimStatus.OPEN, 1)));
+
+        mvc.perform(get("/internal/v1/assumed-claims")
+                        .header(BookScopeFilter.BOOK_HEADER, ASSUMED)
+                        .param("tenantId", TENANT.toString())
+                        .param("assignedAdjuster", "A. Adjuster")
+                        .param("assignedTeam", "CASUALTY"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].assignedAdjuster").value("A. Adjuster"))
+                .andExpect(jsonPath("$[0].assignedTeam").value("CASUALTY"));
+
+        verify(service).list(TENANT, "A. Adjuster", "CASUALTY");
     }
 
     @Test
@@ -289,6 +309,9 @@ class AssumedClaimControllerTest {
                 LocalDate.parse("2026-09-02"),
                 new BigDecimal("12500.0000"),
                 "USD",
+                "A. Adjuster",
+                "CASUALTY",
+                Instant.parse("2026-10-19T12:05:00Z"),
                 version,
                 now,
                 now

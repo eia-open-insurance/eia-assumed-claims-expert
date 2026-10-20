@@ -55,6 +55,22 @@ Assumed Claims persistence, invariants, read models, batch jobs, Quartz schedule
   key for a different body is 409 `EIA-RNS-4091` `IDEMPOTENCY_KEY_REUSED`. A failed create rolls the
   reservation back with the command, and a request without a key keeps the previous create
   behavior.
+- Claim assignment:
+  - `assigned_adjuster`, `assigned_team`, `assigned_at`, and `assigned_by` on `assumed_claim`.
+    The PostgreSQL and H2 schemas add them with idempotent
+    `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so an existing database upgrades in place.
+  - `PATCH /api/v1/assumed-claims/claims/{claimId}/assignment`, plus the shorter
+    `/api/v1/assumed-claims/{claimId}/assignment` and
+    `/internal/v1/assumed-claims/{claimId}/assignment` aliases. The body is
+    `{assignedAdjuster, assignedTeam, expectedVersion}`; `assignedTeam` is optional, the actor is
+    the optional `X-EIA-Actor` header (falling back to the assigned adjuster), and the claim
+    version is the optimistic token (a stale value is 409 `EIA-RNS-7006`).
+  - Repeating the current assignment with the current version is a no-op. A real change bumps the
+    claim version and writes `assumed.claim.assigned` to the transactional outbox with the
+    previous owner, the new owner, `assignedAt`, and `assignedBy`.
+  - The claim projection used by list and get includes `assignedAdjuster`, `assignedTeam`, and
+    `assignedAt`; the list route also accepts optional `assignedAdjuster` and `assignedTeam`
+    filters for work-queue search.
 - The book wall is enforced on every `/internal/v1/**` call. A request without
   `X-EIA-Book: ASSUMED` receives a structured `404` (`EIA-RNS-7005`), never `403`.
 - Invariants enforced transactionally:
@@ -97,7 +113,7 @@ Create the database once with
 
 ## Verification
 
-- Unit and controller tests: `.\gradlew.bat test` (159 tests).
+- Unit and controller tests: `.\gradlew.bat test` (212 tests).
 - Live PostgreSQL smoke: creates a dedicated `eia_assumed_live` database and exercises
   advice -> reserve -> cash call -> recovery, the open gate, recovery cap, append-only audit,
   dispute blocking, commutation closure, and bordereau duplicate/replay:

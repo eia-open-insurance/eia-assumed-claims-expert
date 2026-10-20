@@ -48,6 +48,11 @@ import java.util.UUID;
  * events. These four names are new in this slice and are not yet present in
  * {@code eia-contracts/asyncapi}; the contracts repository is owned separately
  * and the gap is reported for catalog follow-up.</p>
+ *
+ * <p>Claim assignment adds {@code assumed.claim.assigned}. It is emitted only
+ * when the assignment actually changes; a same-assignment retry is a no-op.
+ * The name is not yet present in {@code eia-contracts/asyncapi} and is reported
+ * as a contract gap for the catalog follow-up.</p>
  */
 final class AssumedClaimEvents {
     static final String REGISTERED = "assumed.claim.registered";
@@ -63,6 +68,7 @@ final class AssumedClaimEvents {
     static final String TASK_COMPLETED = "assumed.claim.task-completed";
     static final String TASK_UPDATED = "assumed.claim.task-updated";
     static final String NOTE_ADDED = "assumed.claim.note-added";
+    static final String ASSIGNED = "assumed.claim.assigned";
 
     private static final Book EVENT_BOOK = Book.ASSUMED;
     private static final String VERTICAL = "assumed";
@@ -83,6 +89,32 @@ final class AssumedClaimEvents {
         data.put("createdAt", instant(claim.createdAt()));
 
         return envelope(claim, REGISTERED, claim.version() + 1L, now, data);
+    }
+
+    /**
+     * Assignment change. Only emitted for a real change; the payload carries
+     * both the previous and the new owner so a consumer can apply or reverse
+     * the assignment without reading the aggregate.
+     */
+    static EventEnvelope assigned(AssumedClaim before, AssumedClaim after, String assignedBy,
+                                  Instant now) {
+        Map<String, Object> data = identity(after);
+        data.put("assignedAdjuster", after.assignedAdjuster());
+        data.put("assignedTeam", after.assignedTeam());
+        data.put("assignedAt", instant(after.assignedAt()));
+        data.put("assignedBy", assignedBy);
+        data.put("previousAssignedAdjuster", before.assignedAdjuster());
+        data.put("previousAssignedTeam", before.assignedTeam());
+        List<String> changedFields = new java.util.ArrayList<>();
+        if (!java.util.Objects.equals(before.assignedAdjuster(), after.assignedAdjuster())) {
+            changedFields.add("assignedAdjuster");
+        }
+        if (!java.util.Objects.equals(before.assignedTeam(), after.assignedTeam())) {
+            changedFields.add("assignedTeam");
+        }
+        data.put("changedFields", changedFields);
+
+        return envelope(after, ASSIGNED, after.version() + 1L, now, data);
     }
 
     static EventEnvelope statusChanged(AssumedClaim before, AssumedClaim after, Instant now) {
