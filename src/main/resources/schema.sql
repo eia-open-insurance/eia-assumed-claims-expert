@@ -315,6 +315,35 @@ CREATE TABLE IF NOT EXISTS claim_note (
 CREATE INDEX IF NOT EXISTS ix_claim_note_created
     ON claim_note (tenant_id, assumed_claim_id, created_at DESC);
 
+-- ---------------------------------------------------------------------------
+-- Command idempotency for claim task and note creation. Scope is tenant +
+-- command type + key, so the same key can be used once for a task and once for
+-- a note. response_body is the original 201 projection serialized as JSON and
+-- is replayed verbatim. The reservation, the created child row, its outbox
+-- event, and the response body share one transaction: a rollback leaves no key
+-- behind and a replay writes no duplicate row or event.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS claim_command_idempotency (
+    tenant_id UUID NOT NULL,
+    command_type VARCHAR(48) NOT NULL,
+    idempotency_key VARCHAR(64) NOT NULL,
+    request_hash CHAR(64) NOT NULL,
+    claim_id UUID NOT NULL REFERENCES assumed_claim (id),
+    response_body JSONB,
+    created_at TIMESTAMPTZ NOT NULL,
+    CONSTRAINT pk_claim_command_idempotency
+        PRIMARY KEY (tenant_id, command_type, idempotency_key),
+    CONSTRAINT ck_claim_command_idempotency_type
+        CHECK (command_type IN ('CLAIM_TASK_CREATE', 'CLAIM_NOTE_CREATE')),
+    CONSTRAINT ck_claim_command_idempotency_key
+        CHECK (CHAR_LENGTH(idempotency_key) BETWEEN 1 AND 64),
+    CONSTRAINT ck_claim_command_idempotency_hash
+        CHECK (CHAR_LENGTH(request_hash) = 64)
+);
+
+CREATE INDEX IF NOT EXISTS ix_claim_command_idempotency_claim
+    ON claim_command_idempotency (tenant_id, claim_id, command_type);
+
 CREATE TABLE IF NOT EXISTS assumed_claim_audit (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL,

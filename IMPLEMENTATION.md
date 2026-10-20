@@ -17,6 +17,11 @@
 - Claim tasks (optimistic version, open-first due-date ordering, COMPLETE/CANCELLED transitions)
   and append-only diary notes (newest first) under both the public `/api/v1` prefix and the
   internal expert alias, with 404 outside the tenant or ASSUMED book.
+- Idempotent task and note creation via an optional `Idempotency-Key` (1-64 characters):
+  `claim_command_idempotency` is scoped by tenant, command type, and key, stores the original
+  response body as JSONB, and returns it with `Idempotent-Replay: true`; a different body is
+  409 `EIA-RNS-4091`. The reservation shares the command transaction, so rollback and replay
+  leave no stray row or event.
 - Transactional outbox production (`com.eia:libs`): claim registration, status changes
   (including close/reopen), accepted loss advice, reserve changes, cash calls, recoveries,
   commutations, task lifecycle changes, and notes write their canonical event in the aggregate

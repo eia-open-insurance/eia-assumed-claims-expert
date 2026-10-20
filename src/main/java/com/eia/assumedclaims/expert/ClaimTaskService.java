@@ -11,6 +11,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 /**
  * Claim task commands and queries.
@@ -21,6 +22,11 @@ import java.util.UUID;
  * version is the optimistic concurrency token exposed by PATCH; a stale token
  * is 409 and a command that repeats the current status is a no-op that writes
  * no event.</p>
+ *
+ * <p>Create accepts an optional {@code Idempotency-Key}. The key is reserved in
+ * the same transaction as the task and its event, so a rollback leaves no key
+ * behind. A same-key retry with an identical canonical body returns the stored
+ * 201 projection without writing a second task, claim version bump, or event.</p>
  */
 @Service
 public class ClaimTaskService {
@@ -28,25 +34,29 @@ public class ClaimTaskService {
     private final AssumedClaimService claimService;
     private final AssumedClaimRepository claims;
     private final OutboxRepository outbox;
+    private final ClaimCommandIdempotency idempotency;
     private final Clock clock;
 
     @Autowired
     public ClaimTaskService(ClaimTaskRepository repository,
                             AssumedClaimService claimService,
                             AssumedClaimRepository claims,
-                            OutboxRepository outbox) {
-        this(repository, claimService, claims, outbox, Clock.systemUTC());
+                            OutboxRepository outbox,
+                            ClaimCommandIdempotency idempotency) {
+        this(repository, claimService, claims, outbox, idempotency, Clock.systemUTC());
     }
 
     ClaimTaskService(ClaimTaskRepository repository,
                      AssumedClaimService claimService,
                      AssumedClaimRepository claims,
                      OutboxRepository outbox,
+                     ClaimCommandIdempotency idempotency,
                      Clock clock) {
         this.repository = repository;
         this.claimService = claimService;
         this.claims = claims;
         this.outbox = outbox;
+        this.idempotency = idempotency;
         this.clock = clock;
     }
 
@@ -56,7 +66,11 @@ public class ClaimTaskService {
     }
 
     @Transactional
-    public ClaimTask create(UUID tenantId, UUID claimId, CreateTaskRequest request) {
+    public CommandResult<ClaimTask> create(UUID tenantId,
+                                           UUID claimId,
+                                           CreateTaskRequest request,
+                                           String idempotencyKey) {
+        String key = IdempotencyKeys.normalize(idempotencyKey);
         AssumedClaim claim = claimService.requireClaim(tenantId, claimId);
         String title = TaskNoteVocab.requiredText(request.title(), "title", 200);
         String description = TaskNoteVocab.optionalText(request.description(), "description", 4000);
@@ -66,6 +80,26 @@ public class ClaimTaskService {
         String assignedTo = TaskNoteVocab.optionalText(request.assignedTo(), "assignedTo", 120);
 
         Instant now = Instant.now(clock);
+        Supplier<ClaimTask> action = () -> insertTask(tenantId, claimId, claim, title, description,
+                dueDate, priority, assignedTo, now);
+        if (key == null) {
+            return new CommandResult<>(action.get(), false);
+        }
+        String requestHash = IdempotencyKeys.taskRequestHash(claimId, title, description, dueDate,
+                priority, assignedTo);
+        return idempotency.run(tenantId, ClaimCommandIdempotency.TASK_CREATE, key, requestHash,
+                claimId, now, ClaimTask.class, action);
+    }
+
+    private ClaimTask insertTask(UUID tenantId,
+                                 UUID claimId,
+                                 AssumedClaim claim,
+                                 String title,
+                                 String description,
+                                 LocalDate dueDate,
+                                 String priority,
+                                 String assignedTo,
+                                 Instant now) {
         String taskNumber = String.format("TSK-%d-%07d", LocalDate.now(clock).getYear(),
                 repository.nextTaskSequence());
         ClaimTask task = repository.insert(UuidV7.generate(), tenantId, claimId, taskNumber, title,

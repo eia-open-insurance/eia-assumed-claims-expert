@@ -25,3 +25,14 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
     `assumed.claim.task-completed`, `assumed.claim.task-updated`, and
     `assumed.claim.note-added`; task/note writes bump the claim version so event aggregate
     versions stay monotonic, and rollback tests cover both resources.
+- Idempotent task and note creation:
+  - Optional `Idempotency-Key` (1-64 characters) on both POSTs, with a
+    `claim_command_idempotency` table scoped by tenant, command type, and key and a stored
+    `response_body` JSONB projection.
+  - Same key and canonical body returns the original 201 projection with
+    `Idempotent-Replay: true` and writes no duplicate row, version bump, or event; a different
+    body returns 409 `EIA-RNS-4091` `IDEMPOTENCY_KEY_REUSED`; a missing key keeps the previous
+    behavior.
+  - The reservation shares the command transaction, so rollback leaves no key behind.
+  - H2 integration tests cover task/note replay, conflict, missing key, tenant and command-type
+    scoping, rollback, and event counts.

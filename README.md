@@ -47,6 +47,14 @@ Assumed Claims persistence, invariants, read models, batch jobs, Quartz schedule
   or `X-EIA-Tenant`; writes take `X-EIA-Tenant`. The public routes enforce the ASSUMED book wall
   in the controller, and every route is tenant- and claim-scoped, so a claim outside the tenant or
   the ASSUMED book is 404.
+- Task and note POSTs accept an optional `Idempotency-Key` (1-64 characters). The key is reserved
+  in `claim_command_idempotency`, scoped by tenant, command type (`CLAIM_TASK_CREATE` /
+  `CLAIM_NOTE_CREATE`), and key, in the same transaction as the child row and its outbox event. A
+  retry with the identical canonical body returns the original 201 projection with
+  `Idempotent-Replay: true` and writes no duplicate row, claim version bump, or event; reusing the
+  key for a different body is 409 `EIA-RNS-4091` `IDEMPOTENCY_KEY_REUSED`. A failed create rolls the
+  reservation back with the command, and a request without a key keeps the previous create
+  behavior.
 - The book wall is enforced on every `/internal/v1/**` call. A request without
   `X-EIA-Book: ASSUMED` receives a structured `404` (`EIA-RNS-7005`), never `403`.
 - Invariants enforced transactionally:

@@ -2,6 +2,7 @@ package com.eia.assumedclaims.expert;
 
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -10,7 +11,6 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -23,6 +23,10 @@ import java.util.UUID;
  * {@code /internal/v1/assumed-claims/{claimId}/tasks} aliases match the other
  * Assumed Claims child routes. Every route is tenant-scoped and returns 404
  * outside the ASSUMED book.
+ *
+ * <p>POST accepts an optional {@code Idempotency-Key} (1-64 characters) and
+ * echoes {@code Idempotent-Replay: true} when the stored 201 projection was
+ * replayed instead of creating a second task.</p>
  */
 @RestController
 @RequestMapping({
@@ -31,6 +35,9 @@ import java.util.UUID;
         "/internal/v1/assumed-claims/{claimId}/tasks"
 })
 public class ClaimTaskController {
+    private static final String IDEMPOTENCY_KEY = "Idempotency-Key";
+    private static final String IDEMPOTENT_REPLAY = "Idempotent-Replay";
+
     private final ClaimTaskService service;
 
     public ClaimTaskController(ClaimTaskService service) {
@@ -47,13 +54,17 @@ public class ClaimTaskController {
     }
 
     @PostMapping
-    @ResponseStatus(HttpStatus.CREATED)
-    public ClaimTask create(@RequestHeader("X-EIA-Tenant") UUID tenantId,
-                            @RequestHeader(value = "X-EIA-Book", required = false) String book,
-                            @PathVariable UUID claimId,
-                            @Valid @RequestBody CreateTaskRequest request) {
+    public ResponseEntity<ClaimTask> create(
+            @RequestHeader("X-EIA-Tenant") UUID tenantId,
+            @RequestHeader(value = "X-EIA-Book", required = false) String book,
+            @RequestHeader(value = IDEMPOTENCY_KEY, required = false) String idempotencyKey,
+            @PathVariable UUID claimId,
+            @Valid @RequestBody CreateTaskRequest request) {
         BookWall.requireAssumed(book);
-        return service.create(tenantId, claimId, request);
+        CommandResult<ClaimTask> result = service.create(tenantId, claimId, request, idempotencyKey);
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .header(IDEMPOTENT_REPLAY, Boolean.toString(result.replayed()))
+                .body(result.body());
     }
 
     @PatchMapping("/{taskId}")

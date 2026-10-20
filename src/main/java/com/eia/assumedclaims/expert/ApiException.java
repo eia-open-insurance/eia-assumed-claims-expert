@@ -154,6 +154,39 @@ public class ApiException extends RuntimeException {
         );
     }
 
+    /**
+     * Same {@code Idempotency-Key} reused with a different canonical body. The
+     * resource is unchanged and the caller must use a new key for a new command.
+     */
+    public static ApiException idempotencyKeyReused() {
+        String message = "Idempotency-Key was already used with a different request.";
+        return new ApiException(
+                HttpStatus.CONFLICT,
+                "EIA-RNS-4091",
+                "CONFLICT",
+                "Idempotency key reused",
+                message,
+                false,
+                List.of(new FieldIssue("Idempotency-Key", "IDEMPOTENCY_KEY_REUSED", message))
+        );
+    }
+
+    /**
+     * The stored command reservation is unreadable or its response body is
+     * missing. This is an internal invariant failure, never a client error.
+     */
+    public static ApiException idempotencyRecordInconsistent() {
+        return new ApiException(
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                "EIA-RNS-7099",
+                "INTERNAL",
+                "Internal error",
+                "The idempotency record is inconsistent; retry the command.",
+                true,
+                List.of()
+        );
+    }
+
     public static ApiException adviceNotFound(UUID id) {
         return new ApiException(
                 HttpStatus.NOT_FOUND,

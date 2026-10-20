@@ -19,12 +19,14 @@ import static org.hamcrest.Matchers.hasItems;
 import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -103,8 +105,8 @@ class ClaimTaskNoteEndpointTest {
 
     @Test
     void createsATask() throws Exception {
-        when(taskService.create(eq(TENANT), eq(CLAIM_ID), any(CreateTaskRequest.class)))
-                .thenReturn(task("OPEN", 1));
+        when(taskService.create(eq(TENANT), eq(CLAIM_ID), any(CreateTaskRequest.class), isNull()))
+                .thenReturn(new CommandResult<>(task("OPEN", 1), false));
 
         mvc.perform(post(BASE + "/tasks")
                         .header("X-EIA-Tenant", TENANT)
@@ -120,11 +122,60 @@ class ClaimTaskNoteEndpointTest {
                                 }
                                 """))
                 .andExpect(status().isCreated())
+                .andExpect(header().string("Idempotent-Replay", "false"))
                 .andExpect(jsonPath("$.taskNumber").value("TSK-2026-0000001"))
                 .andExpect(jsonPath("$.status").value("OPEN"))
                 .andExpect(jsonPath("$.version").value(1));
 
-        verify(taskService).create(eq(TENANT), eq(CLAIM_ID), any(CreateTaskRequest.class));
+        verify(taskService).create(eq(TENANT), eq(CLAIM_ID), any(CreateTaskRequest.class), isNull());
+    }
+
+    @Test
+    void createsATaskWithAnIdempotencyKey() throws Exception {
+        when(taskService.create(eq(TENANT), eq(CLAIM_ID), any(CreateTaskRequest.class),
+                eq("task-key-1"))).thenReturn(new CommandResult<>(task("OPEN", 1), false));
+
+        mvc.perform(post(BASE + "/tasks")
+                        .header("X-EIA-Tenant", TENANT)
+                        .header("X-EIA-Book", ASSUMED)
+                        .header("Idempotency-Key", "task-key-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "title": "Review medical records",
+                                  "dueDate": "2026-04-15",
+                                  "priority": "HIGH"
+                                }
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(header().string("Idempotent-Replay", "false"))
+                .andExpect(jsonPath("$.taskNumber").value("TSK-2026-0000001"));
+
+        verify(taskService).create(eq(TENANT), eq(CLAIM_ID), any(CreateTaskRequest.class),
+                eq("task-key-1"));
+    }
+
+    @Test
+    void replaysATaskCreateWithTheOriginalProjection() throws Exception {
+        when(taskService.create(eq(TENANT), eq(CLAIM_ID), any(CreateTaskRequest.class),
+                eq("task-key-1"))).thenReturn(new CommandResult<>(task("OPEN", 1), true));
+
+        mvc.perform(post(BASE + "/tasks")
+                        .header("X-EIA-Tenant", TENANT)
+                        .header("X-EIA-Book", ASSUMED)
+                        .header("Idempotency-Key", "task-key-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "title": "Review medical records",
+                                  "dueDate": "2026-04-15",
+                                  "priority": "HIGH"
+                                }
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(header().string("Idempotent-Replay", "true"))
+                .andExpect(jsonPath("$.taskNumber").value("TSK-2026-0000001"))
+                .andExpect(jsonPath("$.version").value(1));
     }
 
     @Test
@@ -271,8 +322,8 @@ class ClaimTaskNoteEndpointTest {
 
     @Test
     void createsANote() throws Exception {
-        when(noteService.add(eq(TENANT), eq(CLAIM_ID), any(CreateNoteRequest.class)))
-                .thenReturn(note("DIARY", "Called the claimant"));
+        when(noteService.add(eq(TENANT), eq(CLAIM_ID), any(CreateNoteRequest.class), isNull()))
+                .thenReturn(new CommandResult<>(note("DIARY", "Called the claimant"), false));
 
         mvc.perform(post(BASE + "/notes")
                         .header("X-EIA-Tenant", TENANT)
@@ -286,11 +337,35 @@ class ClaimTaskNoteEndpointTest {
                                 }
                                 """))
                 .andExpect(status().isCreated())
+                .andExpect(header().string("Idempotent-Replay", "false"))
                 .andExpect(jsonPath("$.noteNumber").value("NTE-2026-0000001"))
                 .andExpect(jsonPath("$.noteType").value("DIARY"))
                 .andExpect(jsonPath("$.author").value("adjuster@example.com"));
 
-        verify(noteService).add(eq(TENANT), eq(CLAIM_ID), any(CreateNoteRequest.class));
+        verify(noteService).add(eq(TENANT), eq(CLAIM_ID), any(CreateNoteRequest.class), isNull());
+    }
+
+    @Test
+    void replaysANoteAppendWithTheOriginalProjection() throws Exception {
+        when(noteService.add(eq(TENANT), eq(CLAIM_ID), any(CreateNoteRequest.class),
+                eq("note-key-1")))
+                .thenReturn(new CommandResult<>(note("DIARY", "Called the claimant"), true));
+
+        mvc.perform(post(BASE + "/notes")
+                        .header("X-EIA-Tenant", TENANT)
+                        .header("X-EIA-Book", ASSUMED)
+                        .header("Idempotency-Key", "note-key-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "noteType": "DIARY",
+                                  "body": "Called the claimant",
+                                  "author": "adjuster@example.com"
+                                }
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(header().string("Idempotent-Replay", "true"))
+                .andExpect(jsonPath("$.noteNumber").value("NTE-2026-0000001"));
     }
 
     @Test

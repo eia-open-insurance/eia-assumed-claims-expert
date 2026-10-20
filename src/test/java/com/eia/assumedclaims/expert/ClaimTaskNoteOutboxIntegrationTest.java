@@ -47,6 +47,7 @@ class ClaimTaskNoteOutboxIntegrationTest {
     @BeforeEach
     void clean() {
         transaction = new TransactionTemplate(transactionManager);
+        jdbc.update("DELETE FROM claim_command_idempotency");
         jdbc.update("DELETE FROM outbox_event");
         jdbc.update("DELETE FROM claim_note");
         jdbc.update("DELETE FROM claim_task");
@@ -67,7 +68,7 @@ class ClaimTaskNoteOutboxIntegrationTest {
         AssumedClaim claim = createClaim();
         ClaimTask task = taskService.create(TENANT, claim.id(), new CreateTaskRequest(
                 "Review medical records", "Order records and index the file",
-                LocalDate.of(2026, 4, 15), "HIGH", "adjuster@example.com"));
+                LocalDate.of(2026, 4, 15), "HIGH", "adjuster@example.com"), null).body();
 
         assertThat(task.status()).isEqualTo("OPEN");
         assertThat(task.version()).isEqualTo(1);
@@ -196,13 +197,13 @@ class ClaimTaskNoteOutboxIntegrationTest {
         ClaimTask task = createTask(claim, "Review medical records",
                 LocalDate.of(2026, 4, 15), "HIGH");
         noteService.add(TENANT, claim.id(),
-                new CreateNoteRequest("DIARY", "Called the claimant", "adjuster@example.com"));
+                new CreateNoteRequest("DIARY", "Called the claimant", "adjuster@example.com"), null);
 
         assertThatThrownBy(() -> taskService.list(OTHER_TENANT, claim.id()))
                 .isInstanceOf(ApiException.class)
                 .hasMessageContaining("was not found");
         assertThatThrownBy(() -> taskService.create(OTHER_TENANT, claim.id(), new CreateTaskRequest(
-                "Intruder task", null, LocalDate.of(2026, 4, 15), "LOW", null)))
+                "Intruder task", null, LocalDate.of(2026, 4, 15), "LOW", null), null))
                 .isInstanceOf(ApiException.class)
                 .hasMessageContaining("was not found");
         assertThatThrownBy(() -> taskService.changeStatus(OTHER_TENANT, claim.id(), task.id(),
@@ -228,7 +229,7 @@ class ClaimTaskNoteOutboxIntegrationTest {
 
         assertThatThrownBy(() -> transaction.executeWithoutResult(status -> {
             taskService.create(TENANT, claim.id(), new CreateTaskRequest(
-                    "Review medical records", null, LocalDate.of(2026, 4, 15), "HIGH", null));
+                    "Review medical records", null, LocalDate.of(2026, 4, 15), "HIGH", null), null);
             throw new IllegalStateException("force rollback");
         })).isInstanceOf(IllegalStateException.class)
                 .hasMessage("force rollback");
@@ -244,9 +245,11 @@ class ClaimTaskNoteOutboxIntegrationTest {
     void notesAppendAndListNewestFirst() {
         AssumedClaim claim = createClaim();
         ClaimNote first = noteService.add(TENANT, claim.id(),
-                new CreateNoteRequest("DIARY", "Called the claimant", "adjuster@example.com"));
+                new CreateNoteRequest("DIARY", "Called the claimant", "adjuster@example.com"), null)
+                .body();
         ClaimNote second = noteService.add(TENANT, claim.id(),
-                new CreateNoteRequest("SETTLEMENT", "Authority requested", "manager@example.com"));
+                new CreateNoteRequest("SETTLEMENT", "Authority requested", "manager@example.com"),
+                null).body();
 
         List<ClaimNote> notes = noteService.list(TENANT, claim.id());
 
@@ -279,7 +282,8 @@ class ClaimTaskNoteOutboxIntegrationTest {
 
         assertThatThrownBy(() -> transaction.executeWithoutResult(status -> {
             noteService.add(TENANT, claim.id(),
-                    new CreateNoteRequest("DIARY", "Called the claimant", "adjuster@example.com"));
+                    new CreateNoteRequest("DIARY", "Called the claimant", "adjuster@example.com"),
+                    null);
             throw new IllegalStateException("force rollback");
         })).isInstanceOf(IllegalStateException.class)
                 .hasMessage("force rollback");
@@ -299,7 +303,8 @@ class ClaimTaskNoteOutboxIntegrationTest {
 
     private ClaimTask createTask(AssumedClaim claim, String title, LocalDate dueDate, String priority) {
         return taskService.create(TENANT, claim.id(),
-                new CreateTaskRequest(title, null, dueDate, priority, "adjuster@example.com"));
+                new CreateTaskRequest(title, null, dueDate, priority, "adjuster@example.com"), null)
+                .body();
     }
 
     private int claimVersion(UUID claimId) {

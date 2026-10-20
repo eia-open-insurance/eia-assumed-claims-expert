@@ -310,6 +310,29 @@ CREATE TABLE IF NOT EXISTS claim_note (
 CREATE INDEX IF NOT EXISTS ix_claim_note_created
     ON claim_note (tenant_id, assumed_claim_id, created_at DESC);
 
+-- H2-compatible copy of the command idempotency table. response_body is TEXT
+-- here; production DDL uses jsonb.
+CREATE TABLE IF NOT EXISTS claim_command_idempotency (
+    tenant_id UUID NOT NULL,
+    command_type VARCHAR(48) NOT NULL,
+    idempotency_key VARCHAR(64) NOT NULL,
+    request_hash CHAR(64) NOT NULL,
+    claim_id UUID NOT NULL REFERENCES assumed_claim (id),
+    response_body TEXT,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    CONSTRAINT pk_claim_command_idempotency
+        PRIMARY KEY (tenant_id, command_type, idempotency_key),
+    CONSTRAINT ck_claim_command_idempotency_type
+        CHECK (command_type IN ('CLAIM_TASK_CREATE', 'CLAIM_NOTE_CREATE')),
+    CONSTRAINT ck_claim_command_idempotency_key
+        CHECK (CHAR_LENGTH(idempotency_key) BETWEEN 1 AND 64),
+    CONSTRAINT ck_claim_command_idempotency_hash
+        CHECK (CHAR_LENGTH(request_hash) = 64)
+);
+
+CREATE INDEX IF NOT EXISTS ix_claim_command_idempotency_claim
+    ON claim_command_idempotency (tenant_id, claim_id, command_type);
+
 CREATE TABLE IF NOT EXISTS assumed_claim_audit (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL,

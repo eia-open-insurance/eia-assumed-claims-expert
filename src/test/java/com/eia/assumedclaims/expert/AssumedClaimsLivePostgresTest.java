@@ -249,6 +249,77 @@ class AssumedClaimsLivePostgresTest {
         assertEquals(first.get("batch").get("id").asText(), replay.get("batch").get("id").asText());
     }
 
+    @Test
+    void taskAndNoteIdempotencyKeysReplayFromJsonb() {
+        JsonNode claim = ok(post("/internal/v1/assumed-claims", Map.of(
+                "tenantId", TENANT.toString(),
+                "contractId", CONTRACT.toString(),
+                "cedentClaimNumber", "CED-LIVE-IDEM-1",
+                "lossDate", LocalDate.now().minusDays(10).toString(),
+                "reportDate", LocalDate.now().minusDays(9).toString(),
+                "reserveAmount", "0.00",
+                "reserveCurrency", "USD")), 201);
+        String claimId = claim.get("id").asText();
+        Map<String, Object> taskBody = Map.of(
+                "title", "Review medical records",
+                "description", "Order records and index the file",
+                "dueDate", LocalDate.now().plusDays(14).toString(),
+                "priority", "HIGH",
+                "assignedTo", "adjuster@example.com");
+
+        ResponseEntity<JsonNode> firstTask = post(
+                "/internal/v1/assumed-claims/" + claimId + "/tasks", taskBody, "live-task-key");
+        JsonNode createdTask = ok(firstTask, 201);
+        assertEquals("false", firstTask.getHeaders().getFirst("Idempotent-Replay"));
+
+        ResponseEntity<JsonNode> replayedTask = post(
+                "/internal/v1/assumed-claims/" + claimId + "/tasks", taskBody, "live-task-key");
+        JsonNode replay = ok(replayedTask, 201);
+        assertEquals("true", replayedTask.getHeaders().getFirst("Idempotent-Replay"));
+        assertEquals(createdTask.get("id").asText(), replay.get("id").asText());
+        assertEquals(createdTask.get("taskNumber").asText(), replay.get("taskNumber").asText());
+        assertEquals(1, count("claim_task", claimId));
+        assertEquals(1, countEvents(claimId, "assumed.claim.task-created"));
+
+        String responseBody = jdbc.queryForObject("""
+                SELECT response_body::text FROM claim_command_idempotency
+                 WHERE tenant_id = ? AND command_type = 'CLAIM_TASK_CREATE'
+                   AND idempotency_key = 'live-task-key'
+                """, String.class, TENANT);
+        assertNotNull(responseBody);
+        assertTrue(responseBody.contains(createdTask.get("taskNumber").asText()));
+        assertEquals("jsonb", jdbc.queryForObject("""
+                SELECT data_type FROM information_schema.columns
+                 WHERE table_name = 'claim_command_idempotency' AND column_name = 'response_body'
+                """, String.class));
+
+        JsonNode conflict = error(post("/internal/v1/assumed-claims/" + claimId + "/tasks",
+                Map.of("title", "A different task",
+                        "dueDate", LocalDate.now().plusDays(14).toString(),
+                        "priority", "HIGH"), "live-task-key"), 409);
+        assertEquals("EIA-RNS-4091", conflict.get("code").asText());
+        assertEquals("IDEMPOTENCY_KEY_REUSED",
+                conflict.get("errors").get(0).get("code").asText());
+        assertEquals(1, count("claim_task", claimId));
+
+        Map<String, Object> noteBody = Map.of(
+                "noteType", "DIARY",
+                "body", "Called the claimant",
+                "author", "adjuster@example.com");
+        ResponseEntity<JsonNode> firstNote = post(
+                "/internal/v1/assumed-claims/" + claimId + "/notes", noteBody, "live-note-key");
+        JsonNode createdNote = ok(firstNote, 201);
+        assertEquals("false", firstNote.getHeaders().getFirst("Idempotent-Replay"));
+
+        ResponseEntity<JsonNode> replayedNote = post(
+                "/internal/v1/assumed-claims/" + claimId + "/notes", noteBody, "live-note-key");
+        JsonNode replayNote = ok(replayedNote, 201);
+        assertEquals("true", replayedNote.getHeaders().getFirst("Idempotent-Replay"));
+        assertEquals(createdNote.get("id").asText(), replayNote.get("id").asText());
+        assertEquals(1, count("claim_note", claimId));
+        assertEquals(1, countEvents(claimId, "assumed.claim.note-added"));
+    }
+
     private ResponseEntity<JsonNode> get(String path) {
         return rest.exchange(path, HttpMethod.GET, entity(null), JsonNode.class);
     }
@@ -257,14 +328,37 @@ class AssumedClaimsLivePostgresTest {
         return rest.exchange(path, HttpMethod.POST, entity(body), JsonNode.class);
     }
 
+    private ResponseEntity<JsonNode> post(String path, Object body, String idempotencyKey) {
+        HttpHeaders headers = headers();
+        headers.set("Idempotency-Key", idempotencyKey);
+        return rest.exchange(path, HttpMethod.POST, new HttpEntity<>(body, headers), JsonNode.class);
+    }
+
     private HttpEntity<Object> entity(Object body) {
+        return new HttpEntity<>(body, headers());
+    }
+
+    private HttpHeaders headers() {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.setAccept(List.of(MediaType.APPLICATION_JSON));
         headers.set("X-EIA-Book", ASSUMED);
         headers.set("X-EIA-Tenant", TENANT.toString());
         headers.set("X-EIA-User", "live-smoke@example.com");
-        return new HttpEntity<>(body, headers);
+        return headers;
+    }
+
+    private int count(String table, String claimId) {
+        return jdbc.queryForObject("SELECT count(*) FROM " + table
+                        + " WHERE assumed_claim_id = ?::uuid",
+                Integer.class, claimId);
+    }
+
+    private int countEvents(String claimId, String eventType) {
+        return jdbc.queryForObject("""
+                SELECT count(*) FROM outbox_event
+                 WHERE aggregate_id = ?::uuid AND event_type = ?
+                """, Integer.class, claimId, eventType);
     }
 
     private JsonNode ok(ResponseEntity<JsonNode> response, int expectedStatus) {

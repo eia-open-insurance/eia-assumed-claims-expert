@@ -46,12 +46,14 @@ class ClaimNoteServiceTest {
     private AssumedClaimRepository claims;
     @Mock
     private OutboxRepository outbox;
+    @Mock
+    private ClaimCommandIdempotency idempotency;
 
     private ClaimNoteService service;
 
     @BeforeEach
     void setUp() {
-        service = new ClaimNoteService(repository, claimService, claims, outbox,
+        service = new ClaimNoteService(repository, claimService, claims, outbox, idempotency,
                 Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
@@ -76,7 +78,8 @@ class ClaimNoteServiceTest {
                 any(Instant.class))).thenReturn(note("DIARY", "Called the claimant"));
 
         ClaimNote added = service.add(TENANT, CLAIM_ID,
-                new CreateNoteRequest("DIARY", "Called the claimant", "adjuster@example.com"));
+                new CreateNoteRequest("DIARY", "Called the claimant", "adjuster@example.com"),
+                null).body();
 
         assertEquals("DIARY", added.noteType());
         assertEquals("NTE-2026-0000001", added.noteNumber());
@@ -99,12 +102,30 @@ class ClaimNoteServiceTest {
     }
 
     @Test
+    void aKeyedAppendDelegatesToTheIdempotencyWrapper() {
+        claimExists(0);
+        ClaimNote stored = note("DIARY", "Called the claimant");
+        when(idempotency.run(eq(TENANT), eq(ClaimCommandIdempotency.NOTE_CREATE), eq("note-key-1"),
+                any(String.class), eq(CLAIM_ID), any(Instant.class), eq(ClaimNote.class), any()))
+                .thenReturn(new CommandResult<>(stored, true));
+
+        CommandResult<ClaimNote> result = service.add(TENANT, CLAIM_ID,
+                new CreateNoteRequest("DIARY", "Called the claimant", "adjuster@example.com"),
+                "note-key-1");
+
+        assertTrue(result.replayed());
+        assertSame(stored, result.body());
+        verifyNoInteractions(outbox);
+    }
+
+    @Test
     void rejectsAnUnknownNoteType() {
         claimExists(0);
 
         ApiException error = assertThrows(ApiException.class,
                 () -> service.add(TENANT, CLAIM_ID,
-                        new CreateNoteRequest("EMAIL", "Called the claimant", "adjuster@example.com")));
+                        new CreateNoteRequest("EMAIL", "Called the claimant",
+                                "adjuster@example.com"), null));
 
         assertEquals(HttpStatus.BAD_REQUEST, error.status());
         assertTrue(error.getMessage().contains("Unknown noteType"));
@@ -118,7 +139,7 @@ class ClaimNoteServiceTest {
 
         ApiException error = assertThrows(ApiException.class,
                 () -> service.add(TENANT, CLAIM_ID,
-                        new CreateNoteRequest("DIARY", "   ", "adjuster@example.com")));
+                        new CreateNoteRequest("DIARY", "   ", "adjuster@example.com"), null));
 
         assertTrue(error.getMessage().contains("body is required"));
         verifyNoInteractions(outbox);
@@ -130,7 +151,7 @@ class ClaimNoteServiceTest {
 
         ApiException error = assertThrows(ApiException.class,
                 () -> service.add(TENANT, CLAIM_ID,
-                        new CreateNoteRequest("DIARY", "Called the claimant", " ")));
+                        new CreateNoteRequest("DIARY", "Called the claimant", " "), null));
 
         assertTrue(error.getMessage().contains("author is required"));
         verifyNoInteractions(outbox);

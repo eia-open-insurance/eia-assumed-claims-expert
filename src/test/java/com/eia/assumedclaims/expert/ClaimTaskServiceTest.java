@@ -50,12 +50,14 @@ class ClaimTaskServiceTest {
     private AssumedClaimRepository claims;
     @Mock
     private OutboxRepository outbox;
+    @Mock
+    private ClaimCommandIdempotency idempotency;
 
     private ClaimTaskService service;
 
     @BeforeEach
     void setUp() {
-        service = new ClaimTaskService(repository, claimService, claims, outbox,
+        service = new ClaimTaskService(repository, claimService, claims, outbox, idempotency,
                 Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
@@ -80,7 +82,7 @@ class ClaimTaskServiceTest {
                 eq(TASK_DUE_DATE), eq("HIGH"), eq("adjuster@example.com"), any(Instant.class)))
                 .thenReturn(task("OPEN", 1));
 
-        ClaimTask created = service.create(TENANT, CLAIM_ID, createRequest());
+        ClaimTask created = service.create(TENANT, CLAIM_ID, createRequest(), null).body();
 
         assertEquals("OPEN", created.status());
         assertEquals(1, created.version());
@@ -109,6 +111,21 @@ class ClaimTaskServiceTest {
         assertEquals("adjuster@example.com", payload.get("assignedTo"));
         assertEquals(1, payload.get("version"));
         assertEquals(1, payload.get("taskVersion"));
+    }
+
+    @Test
+    void aKeyedCreateDelegatesToTheIdempotencyWrapper() {
+        claimExists(0);
+        ClaimTask stored = task("OPEN", 1);
+        when(idempotency.run(eq(TENANT), eq(ClaimCommandIdempotency.TASK_CREATE), eq("key-1"),
+                any(String.class), eq(CLAIM_ID), any(Instant.class), eq(ClaimTask.class), any()))
+                .thenReturn(new CommandResult<>(stored, true));
+
+        CommandResult<ClaimTask> result = service.create(TENANT, CLAIM_ID, createRequest(), "key-1");
+
+        assertTrue(result.replayed());
+        assertSame(stored, result.body());
+        verifyNoInteractions(outbox);
     }
 
     @Test
@@ -266,7 +283,7 @@ class ClaimTaskServiceTest {
 
         ApiException error = assertThrows(ApiException.class,
                 () -> service.create(TENANT, CLAIM_ID,
-                        new CreateTaskRequest("  ", null, TASK_DUE_DATE, "HIGH", null)));
+                        new CreateTaskRequest("  ", null, TASK_DUE_DATE, "HIGH", null), null));
 
         assertTrue(error.getMessage().contains("title is required"));
         verify(repository, never()).insert(any(), any(), any(), any(), any(), any(), any(), any(),
@@ -281,7 +298,7 @@ class ClaimTaskServiceTest {
         ApiException error = assertThrows(ApiException.class,
                 () -> service.create(TENANT, CLAIM_ID,
                         new CreateTaskRequest("Review medical records", null, TASK_DUE_DATE,
-                                "CRITICAL", null)));
+                                "CRITICAL", null), null));
 
         assertTrue(error.getMessage().contains("Unknown priority"));
         verifyNoInteractions(outbox);
@@ -293,7 +310,8 @@ class ClaimTaskServiceTest {
 
         ApiException error = assertThrows(ApiException.class,
                 () -> service.create(TENANT, CLAIM_ID,
-                        new CreateTaskRequest("Review medical records", null, null, "HIGH", null)));
+                        new CreateTaskRequest("Review medical records", null, null, "HIGH", null),
+                        null));
 
         assertTrue(error.getMessage().contains("dueDate is required"));
         verifyNoInteractions(outbox);
